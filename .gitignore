@@ -1,0 +1,35 @@
+# فایل‌های دیتابیس محلی
+*.db
+
+# فایل‌های موقت
+*.tmp
+*.temp
+*.log
+
+# فایل‌های سیستم‌عامل
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# فایل‌های IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ویدیوهای دانلود شده (توسعه محلی)
+videos/
+
+# فایل‌های مربوط به PHP (در صورت وجود)
+vendor/
+composer.lock
+
+# فایل‌های محیطی (حاوی اطلاعات حساس)
+.env
+.env.local
+.env.production
