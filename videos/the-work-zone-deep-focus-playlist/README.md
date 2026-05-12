@@ -12,7 +12,7 @@
 |----------|-------|
 | **Title** | `the-work-zone-deep-focus-playlist` |
 | **Source** | [YouTube](https://www.youtube.com/watch?v=heMXOJlg8vg) |
-| **Quality** | best |
+| **Quality** | audio |
 | **Status** | ✅ Complete |
 | **Password** | ❌ No |
 
