@@ -11,7 +11,7 @@
 | Property | Value |
 |----------|-------|
 | **Title** | `video` |
-| **Source** | [YouTube](https://www.youtube.com/watch?v=rgPe_ZVYZ_E) |
+| **Source** | [YouTube](https://www.youtube.com/watch?v=83HVmGoQMfM) |
 | **Quality** | best |
 | **Status** | ✅ Complete |
 | **Password** | ❌ No |
@@ -21,6 +21,7 @@
 ## 📥 Download
 
 > ⚠️ This file will be automatically deleted **5 minutes** after download.
+> 📦 Download **all parts**, then open the main `.zip` file.
 
 ---
 
