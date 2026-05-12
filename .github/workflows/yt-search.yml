@@ -27,16 +27,16 @@ jobs:
   search:
     name: "🔎 Search & Display"
     runs-on: ubuntu-latest
+    container:
+      image: khashayardev/bale-yt-downloader:latest
     timeout-minutes: 5
-    permissions:
-      contents: read
 
     steps:
-      - name: "📦 Install Dependencies"
+      - name: "📦 Verify Dependencies"
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq python3-pip jq curl bc
-          pip3 install --upgrade yt-dlp --quiet
+          echo "✅ Pre-installed in Docker image"
+          yt-dlp --version
+          jq --version
 
       - name: "🔍 Search & Send Results"
         env:
