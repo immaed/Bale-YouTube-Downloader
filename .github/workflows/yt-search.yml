@@ -1,5 +1,5 @@
 # ============================================================
-# yt-search.yml — Bale YouTube Search Engine V7 (Stable + sh compatible)
+# yt-search.yml — Bale YouTube Search Engine V7 (Docker Compatible)
 # ============================================================
 
 name: "🔍 YouTube Search"
@@ -30,10 +30,9 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: "📦 Verify & Prepare"
+      - name: "📦 Verify Dependencies"
         run: |
-          apt-get update -qq && apt-get install -y -qq bash
-          echo "✅ bash installed"
+          echo "✅ Pre-installed in Docker image"
           yt-dlp --version
           jq --version
 
@@ -129,7 +128,7 @@ jobs:
           BODY_FILE="/tmp/body.txt"
           > "$BODY_FILE"
           LINE_NUM=0
-
+          
           while IFS= read -r line; do
             [ -z "$line" ] && continue
             LINE_NUM=$((LINE_NUM + 1))
@@ -154,10 +153,7 @@ jobs:
             fi
             
             if [ -n "$UPLOAD_DATE" ] && [ ${#UPLOAD_DATE} -eq 8 ]; then
-              Y=${UPLOAD_DATE:0:4}
-              M=${UPLOAD_DATE:4:2}
-              D=${UPLOAD_DATE:6:2}
-              UPLOAD_FORMATTED="${Y}/${M}/${D}"
+              UPLOAD_FORMATTED="${UPLOAD_DATE:0:4}/${UPLOAD_DATE:4:2}/${UPLOAD_DATE:6:2}"
             else
               UPLOAD_FORMATTED=""
             fi
@@ -209,7 +205,7 @@ jobs:
             echo "" >> "$BODY_FILE"
             
           done < "$RESULTS_FILE"
-
+          
           HEADER="🔍 *نتایج جستجو*
 
           ▫️ *عبارت:* \`${QUERY}\`
@@ -240,10 +236,9 @@ jobs:
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             
+            BTN_TITLE=$(echo "$TITLE" | cut -c1-30)
             if [ ${#TITLE} -gt 30 ]; then
-              BTN_TITLE="${TITLE:0:27}..."
-            else
-              BTN_TITLE="$TITLE"
+              BTN_TITLE="${BTN_TITLE}..."
             fi
             
             if [ "$FIRST" = true ]; then
