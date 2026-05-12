@@ -1,7 +1,7 @@
 # ============================================================
-# yt-search.yml — Bale YouTube Search Engine V6 (Final)
-# جستجوی کامل با تمام جزئیات + تاریخ شمسی + دکمه دانلود
-# بدون --flat-playlist برای دریافت اطلاعات کامل
+# yt-search.yml — Bale YouTube Search Engine V7 (Stable)
+# جستجوی سریع و پایدار با flat-playlist
+# تمام فیلدهای قابل دسترس + فرمت تمیز
 # ============================================================
 
 name: "🔍 YouTube Search"
@@ -27,7 +27,7 @@ jobs:
   search:
     name: "🔎 Search & Display"
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 5
     permissions:
       contents: read
 
@@ -51,9 +51,8 @@ jobs:
           BOT_TOKEN="${{ secrets.BALE_BOT_TOKEN }}"
           
           # ══════════════════════════════════════════════
-          # توابع کمکی
+          # تابع ارسال پیام
           # ══════════════════════════════════════════════
-          
           send_message() {
             local text="$1"
             local reply_markup="${2:-}"
@@ -81,50 +80,22 @@ jobs:
           # ⭐ فرمت اعداد بزرگ
           format_number() {
             local num=$1
-            if [ -z "$num" ] || [ "$num" = "null" ] || [ "$num" -eq 0 ] 2>/dev/null; then
-              echo "نامشخص"
-            elif [ "$num" -gt 1000000000 ] 2>/dev/null; then
-              echo "scale=1; $num / 1000000000" | bc 2>/dev/null | sed 's/\.0$//'
-              echo " میلیارد"
-            elif [ "$num" -gt 1000000 ] 2>/dev/null; then
-              echo "scale=1; $num / 1000000" | bc 2>/dev/null | sed 's/\.0$//'
-              echo " میلیون"
-            elif [ "$num" -gt 1000 ] 2>/dev/null; then
-              echo "scale=1; $num / 1000" | bc 2>/dev/null | sed 's/\.0$//'
-              echo " هزار"
-            else
-              echo "$num"
-            fi
-          }
-          
-          # ⭐ تبدیل تاریخ میلادی به شمسی (تقریبی)
-          gregorian_to_jalali() {
-            local date_str="$1"
-            if [ -z "$date_str" ] || [ ${#date_str} -ne 8 ]; then
-              echo "نامشخص"
+            if [ -z "$num" ] || [ "$num" = "null" ] || [ "$num" = "0" ] || [ "$num" -eq 0 ] 2>/dev/null; then
+              echo ""
               return
             fi
             
-            local year=${date_str:0:4}
-            local month=${date_str:4:2}
-            local day=${date_str:6:2}
-            
-            # محاسبه تقریبی (اختلاف ثابت)
-            local gy=$((year - 621))
-            local gm=$month
-            local gd=$day
-            
-            # اگر ماه میلادی از ۳ بیشتره (مارس)
-            if [ "$gm" -gt 3 ]; then
-              echo "${gy}/$((gm - 3))/$gd (شمسی)"
-            elif [ "$gm" -eq 3 ] && [ "$gd" -ge 21 ]; then
-              echo "${gy}/1/$((gd - 20)) (شمسی)"
-            elif [ "$gm" -eq 3 ]; then
-              echo "$((gy - 1))/12/$((gd + 10)) (شمسی)"
-            elif [ "$gm" -eq 2 ]; then
-              echo "$((gy - 1))/11/$((gd + 10)) (شمسی)"
+            if [ "$num" -gt 1000000000 ] 2>/dev/null; then
+              local val=$(echo "scale=1; $num / 1000000000" | bc 2>/dev/null)
+              echo "${val} میلیارد"
+            elif [ "$num" -gt 1000000 ] 2>/dev/null; then
+              local val=$(echo "scale=1; $num / 1000000" | bc 2>/dev/null)
+              echo "${val} میلیون"
+            elif [ "$num" -gt 1000 ] 2>/dev/null; then
+              local val=$(echo "scale=1; $num / 1000" | bc 2>/dev/null)
+              echo "${val} هزار"
             else
-              echo "$((gy - 1))/10/$((gd + 11)) (شمسی)"
+              echo "${num}"
             fi
           }
           
@@ -139,70 +110,32 @@ jobs:
           ⏳ _لطفاً چند لحظه صبر کنید..._"
           
           # ══════════════════════════════════════════════
-          # مرحله ۲: اجرای جستجو (دو مرحله‌ای)
+          # مرحله ۲: اجرای جستجو
           # ══════════════════════════════════════════════
-          
-          # مرحله ۲-الف: جستجوی سریع برای گرفتن ID ها
-          IDS_FILE="/tmp/video_ids.txt"
+          RESULTS_FILE="/tmp/search_results.json"
           
           yt-dlp \
             "ytsearch${MAX_RESULTS}:${QUERY}" \
-            --get-id \
+            --dump-json \
             --no-playlist \
             --no-check-certificates \
             --skip-download \
             --flat-playlist \
-            2>/dev/null > "$IDS_FILE" || true
+            2>/dev/null > "$RESULTS_FILE" || true
           
-          IDS_COUNT=$(wc -l < "$IDS_FILE" 2>/dev/null || echo 0)
+          RESULT_COUNT=$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)
           
-          if [ "$IDS_COUNT" -eq 0 ]; then
+          if [ "$RESULT_COUNT" -eq 0 ]; then
             send_message "❌ *نتیجه‌ای یافت نشد!*
 
           برای عبارت: \`${QUERY}\`
           هیچ ویدیویی پیدا نکردم.
 
-          💡 _لطفاً عبارت دیگری را امتحان کنید._"
+          💡 _لطفاً عبارت دیگری را امتحان کنید یا املای کلمات را بررسی کنید._"
             exit 0
           fi
           
-          echo "✅ Found $IDS_COUNT video IDs, fetching full details..."
-          
-          # مرحله ۲-ب: گرفتن اطلاعات کامل برای هر ID
-          RESULTS_FILE="/tmp/search_results.json"
-          > "$RESULTS_FILE"  # خالی کردن فایل
-          
-          SUCCESS_COUNT=0
-          while IFS= read -r video_id; do
-            [ -z "$video_id" ] && continue
-            
-            echo "  📥 Fetching details for: $video_id"
-            
-            # ⭐ با timeout 15 ثانیه برای هر ویدیو
-            timeout 15 yt-dlp \
-              "https://www.youtube.com/watch?v=${video_id}" \
-              --dump-json \
-              --no-playlist \
-              --no-check-certificates \
-              --skip-download \
-              2>/dev/null >> "$RESULTS_FILE" || echo "  ⚠️ Timeout for $video_id"
-            
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            
-          done < "$IDS_FILE"
-          
-          RESULT_COUNT=$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)
-          
-          if [ "$RESULT_COUNT" -eq 0 ]; then
-            send_message "❌ *خطا در دریافت اطلاعات!*
-
-          نتایج پیدا شد ولی اطلاعات کامل قابل دریافت نبود.
-
-          💡 _لطفاً دوباره تلاش کنید._"
-            exit 0
-          fi
-          
-          echo "✅ Successfully fetched $RESULT_COUNT full results."
+          echo "✅ Found $RESULT_COUNT results."
           
           # ══════════════════════════════════════════════
           # مرحله ۳: ساخت پیام اصلی
@@ -224,51 +157,47 @@ jobs:
             [ -z "$line" ] && continue
             LINE_NUM=$((LINE_NUM + 1))
             
-            # ⭐ استخراج تمام فیلدها
+            # ⭐ استخراج فیلدهای در دسترس با flat-playlist
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
             VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
             CHANNEL=$(echo "$line" | jq -r '.channel // .uploader // "نامشخص"')
-            CHANNEL_URL=$(echo "$line" | jq -r '.channel_url // ""')
-            
-            # ⭐ آمار
             VIEW_COUNT=$(echo "$line" | jq -r '.view_count // 0')
-            LIKE_COUNT=$(echo "$line" | jq -r '.like_count // 0')
-            COMMENT_COUNT=$(echo "$line" | jq -r '.comment_count // 0')
-            
-            # ⭐ اطلاعات کانال
-            SUBS=$(echo "$line" | jq -r '.channel_follower_count // 0')
-            
-            # ⭐ زمان
             DURATION=$(echo "$line" | jq -r '.duration // 0')
             UPLOAD_DATE=$(echo "$line" | jq -r '.upload_date // ""')
+            DESCRIPTION=$(echo "$line" | jq -r '.description // ""')
             
-            # ⭐ کیفیت و حجم
-            AGE_LIMIT=$(echo "$line" | jq -r '.age_limit // 0')
-            IS_LIVE=$(echo "$line" | jq -r '.is_live // false')
-            
-            # ⭐ دسته‌بندی
-            CATEGORIES=$(echo "$line" | jq -r '.categories // [] | join(", ")')
-            TAGS=$(echo "$line" | jq -r '.tags // [] | .[:3] | join(", ")')
-            
-            # ⭐ فرمت‌ها
+            # ⭐ فرمت بازدید
             VIEW_COUNT_FORMATTED=$(format_number $VIEW_COUNT)
-            LIKE_COUNT_FORMATTED=$(format_number $LIKE_COUNT)
-            SUBS_FORMATTED=$(format_number $SUBS)
             
-            # فرمت duration
-            if [ "$IS_LIVE" = "true" ]; then
-              DURATION_FORMATTED="🔴 پخش زنده"
-            elif [ "$DURATION" -gt 0 ] 2>/dev/null; then
+            # ⭐ فرمت مدت زمان
+            if [ "$DURATION" -gt 0 ] 2>/dev/null; then
               M=$((DURATION / 60))
               S=$((DURATION % 60))
               DURATION_FORMATTED="${M}:$(printf '%02d' $S)"
             else
-              DURATION_FORMATTED="نامشخص"
+              DURATION_FORMATTED=""
             fi
             
-            # تاریخ شمسی
-            JALALI_DATE=$(gregorian_to_jalali "$UPLOAD_DATE")
+            # ⭐ فرمت تاریخ (نمایش ساده میلادی)
+            if [ -n "$UPLOAD_DATE" ] && [ ${#UPLOAD_DATE} -eq 8 ]; then
+              Y=${UPLOAD_DATE:0:4}
+              M=${UPLOAD_DATE:4:2}
+              D=${UPLOAD_DATE:6:2}
+              UPLOAD_FORMATTED="${Y}/${M}/${D}"
+            else
+              UPLOAD_FORMATTED=""
+            fi
+            
+            # ⭐ توضیحات (۵۰ کاراکتر اول)
+            if [ -n "$DESCRIPTION" ] && [ "$DESCRIPTION" != "null" ]; then
+              DESC_SHORT=$(echo "$DESCRIPTION" | head -1 | cut -c1-60)
+              if [ ${#DESCRIPTION} -gt 60 ]; then
+                DESC_SHORT="${DESC_SHORT}..."
+              fi
+            else
+              DESC_SHORT=""
+            fi
             
             # ⭐ آیکون شماره
             case $LINE_NUM in
@@ -286,46 +215,34 @@ jobs:
             esac
             
             # ⭐ ساخت هر آیتم
-            BODY+="${NUM_ICON} *${TITLE}*
+            BODY+="${NUM_ICON} *${TITLE}*"
+            
+            # توضیحات (اگر موجود باشد)
+            if [ -n "$DESC_SHORT" ]; then
+              BODY+="
+            📝 ${DESC_SHORT}"
+            fi
+            
+            BODY+="
             🔗 [مشاهده در یوتیوب](${VIDEO_URL})
             👤 کانال: ${CHANNEL}"
-
-            # ⭐ سابسکرایبر (اگر موجود باشد)
-            if [ "$SUBS" -gt 0 ] 2>/dev/null; then
+            
+            # مدت زمان (اگر موجود باشد)
+            if [ -n "$DURATION_FORMATTED" ]; then
               BODY+="
-            👥 سابسکرایبر: ${SUBS_FORMATTED}"
-            fi
-
-            # ⭐ آمار
-            BODY+="
             ⏱ مدت: ${DURATION_FORMATTED}"
-
-            if [ "$IS_LIVE" != "true" ]; then
+            fi
+            
+            # بازدید (اگر موجود باشد)
+            if [ -n "$VIEW_COUNT_FORMATTED" ]; then
               BODY+="
             👁 بازدید: ${VIEW_COUNT_FORMATTED}"
             fi
             
-            if [ "$LIKE_COUNT" -gt 0 ] 2>/dev/null; then
+            # تاریخ (اگر موجود باشد)
+            if [ -n "$UPLOAD_FORMATTED" ]; then
               BODY+="
-            👍 لایک: ${LIKE_COUNT_FORMATTED}"
-            fi
-            
-            # ⭐ تاریخ
-            if [ -n "$UPLOAD_DATE" ]; then
-              BODY+="
-            📅 تاریخ: ${JALALI_DATE}"
-            fi
-
-            # ⭐ دسته‌بندی (اگر موجود باشد)
-            if [ -n "$CATEGORIES" ] && [ "$CATEGORIES" != "[]" ]; then
-              BODY+="
-            📂 دسته: ${CATEGORIES}"
-            fi
-
-            # ⭐ رده سنی
-            if [ "$AGE_LIMIT" -gt 0 ] 2>/dev/null; then
-              BODY+="
-            🔞 رده سنی: +${AGE_LIMIT}"
+            📅 تاریخ: ${UPLOAD_FORMATTED}"
             fi
 
             BODY+="
@@ -336,12 +253,14 @@ jobs:
           
           FOOTER="━━━━━━━━━━━━━━━━━━━━━
 
-          👇 *برای دانلود هر ویدیو، روی دکمه آن کلیک کنید.*"
+          👇 *برای دانلود هر ویدیو، روی دکمه آن کلیک کنید.*
+
+          💡 _با ارسال دوباره عبارت، جستجوی جدید انجام دهید._"
           
           FULL_MESSAGE="${HEADER}${BODY}${FOOTER}"
           
           # ══════════════════════════════════════════════
-          # مرحله ۴: ساخت دکمه‌های callback برای دانلود
+          # مرحله ۴: ساخت دکمه‌های دانلود
           # ══════════════════════════════════════════════
           
           INLINE_KEYBOARD='{"inline_keyboard":['
@@ -356,6 +275,7 @@ jobs:
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             
+            # ⭐ عنوان کوتاه برای دکمه (۳۰ کاراکتر)
             if [ ${#TITLE} -gt 30 ]; then
               BTN_TITLE="${TITLE:0:27}..."
             else
@@ -368,6 +288,7 @@ jobs:
               INLINE_KEYBOARD+=','
             fi
             
+            # ⭐ هر دکمه یه ردیف جداگونه با callback_data
             INLINE_KEYBOARD+='[{"text":"📥 '"${BTN_TITLE}"'","callback_data":"dl_'${VIDEO_ID}'"}]'
             
           done < "$RESULTS_FILE"
