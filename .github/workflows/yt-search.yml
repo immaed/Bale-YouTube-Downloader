@@ -161,7 +161,7 @@ jobs:
             
             # ⭐ ساخت هر آیتم — فرمت نهایی
             BODY+="${NUM_ICON} *${TITLE}*
-            🔗 \`${VIDEO_URL}\`
+            🔗 [مشاهده در یوتیوب](${VIDEO_URL})
             👤 ${CHANNEL}
             👁 ${VIEW_COUNT_FORMATTED}
 
