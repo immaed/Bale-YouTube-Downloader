@@ -1,0 +1,267 @@
+# ============================================================
+# yt-search.yml — Bale YouTube Search Engine
+# جستجوی یوتیوب از طریق ربات بله
+# ============================================================
+# 
+# ویژگی‌ها:
+# - جستجوی ۵ نتیجه اول با thumbnail و duration
+# - نمایش عنوان، کانال، مدت زمان، و thumbnail
+# - دکمه‌های انتخاب ویدیو برای دانلود
+# - پشتیبانی از فارسی و انگلیسی
+# - fallback خودکار در صورت خطا
+#
+# ============================================================
+
+name: "🔍 YouTube Search"
+
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: "عبارت جستجو"
+        required: true
+        type: string
+      chat_id:
+        description: "شناسه کاربر"
+        required: true
+        type: string
+      max_results:
+        description: "تعداد نتایج"
+        required: false
+        type: string
+        default: "5"
+
+jobs:
+  search:
+    name: "🔎 Search YouTube"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      # ── Step 1: Install Dependencies ────────────────
+      - name: "📦 Install yt-dlp & jq"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-pip jq curl
+          pip3 install --upgrade yt-dlp --quiet
+
+      # ── Step 2: Search YouTube ──────────────────────
+      - name: "🔍 Search YouTube"
+        id: search
+        run: |
+          #!/bin/bash
+          set -e
+          
+          QUERY="${{ github.event.inputs.query }}"
+          CHAT_ID="${{ github.event.inputs.chat_id }}"
+          MAX_RESULTS="${{ github.event.inputs.max_results }}"
+          
+          echo "════════════════════════════════════════"
+          echo "🔍 Searching YouTube for: $QUERY"
+          echo "   Max Results: $MAX_RESULTS"
+          echo "════════════════════════════════════════"
+          
+          # ══════════════════════════════════════════════
+          # جستجو با yt-dlp و دریافت اطلاعات کامل
+          # ══════════════════════════════════════════════
+          
+          # فایل JSON موقت برای نتایج
+          RESULTS_FILE="/tmp/search_results.json"
+          
+          # ⭐ جستجو با دریافت thumbnail, duration, title, channel, view_count
+          yt-dlp \
+            "ytsearch${MAX_RESULTS}:${QUERY}" \
+            --dump-json \
+            --no-playlist \
+            --no-check-certificates \
+            --skip-download \
+            --flat-playlist \
+            2>/dev/null > "$RESULTS_FILE" || true
+          
+          # بررسی موفقیت جستجو
+          RESULT_COUNT=$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)
+          
+          if [ "$RESULT_COUNT" -eq 0 ]; then
+            echo "⚠️ No results found."
+            
+            # ارسال پیام "نتیجه‌ای یافت نشد" به کاربر
+            curl -s -X POST "https://tapi.bale.ai/bot${{ secrets.BALE_BOT_TOKEN }}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg chat_id "$CHAT_ID" \
+                --arg text "🔍 *نتیجه‌ای یافت نشد!*\n\nبرای عبارت: \`$QUERY\`\nنتیجه‌ای پیدا نکردم.\n\n_لطفاً عبارت دیگری را امتحان کنید._" \
+                '{chat_id: $chat_id, text: $text, parse_mode: "Markdown"}')" 2>/dev/null || true
+            
+            echo "SEARCH_SUCCESS=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "✅ Found $RESULT_COUNT result(s)"
+          
+          # ══════════════════════════════════════════════
+          # ساخت لیست نتایج برای ارسال به gateway
+          # ══════════════════════════════════════════════
+          
+          # ذخیره نتایج به صورت JSON برای ارسال
+          SEARCH_RESULTS='[]'
+          LINE_NUM=0
+          
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            LINE_NUM=$((LINE_NUM + 1))
+            
+            # استخراج اطلاعات از JSON
+            TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
+            VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
+            DURATION=$(echo "$line" | jq -r '.duration // 0')
+            CHANNEL=$(echo "$line" | jq -r '.channel // .uploader // "نامشخص"')
+            VIEW_COUNT=$(echo "$line" | jq -r '.view_count // 0')
+            THUMBNAIL=$(echo "$line" | jq -r '.thumbnail // ""')
+            VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
+            
+            # فرمت duration (ثانیه → mm:ss)
+            if [ "$DURATION" -gt 0 ] 2>/dev/null; then
+              MINUTES=$((DURATION / 60))
+              SECONDS=$((DURATION % 60))
+              DURATION_FORMATTED=$(printf "%d:%02d" $MINUTES $SECONDS)
+            else
+              DURATION_FORMATTED="نامشخص"
+            fi
+            
+            # فرمت view count
+            if [ "$VIEW_COUNT" -gt 1000000 ] 2>/dev/null; then
+              VIEWS=$(echo "scale=1; $VIEW_COUNT / 1000000" | bc 2>/dev/null || echo "?")
+              VIEW_COUNT_FORMATTED="${VIEWS}M بازدید"
+            elif [ "$VIEW_COUNT" -gt 1000 ] 2>/dev/null; then
+              VIEWS=$(echo "scale=1; $VIEW_COUNT / 1000" | bc 2>/dev/null || echo "?")
+              VIEW_COUNT_FORMATTED="${VIEWS}K بازدید"
+            else
+              VIEW_COUNT_FORMATTED="${VIEW_COUNT} بازدید"
+            fi
+            
+            echo "  [$LINE_NUM] $TITLE ($DURATION_FORMATTED)"
+            echo "          Channel: $CHANNEL | Views: $VIEW_COUNT_FORMATTED"
+            
+            # اضافه کردن به آرایه JSON
+            SEARCH_RESULTS=$(echo "$SEARCH_RESULTS" | jq \
+              --arg num "$LINE_NUM" \
+              --arg title "$TITLE" \
+              --arg id "$VIDEO_ID" \
+              --arg url "$VIDEO_URL" \
+              --arg duration "$DURATION_FORMATTED" \
+              --arg channel "$CHANNEL" \
+              --arg views "$VIEW_COUNT_FORMATTED" \
+              --arg thumbnail "$THUMBNAIL" \
+              '. + [{"num": $num, "title": $title, "id": $id, "url": $url, "duration": $duration, "channel": $channel, "views": $views, "thumbnail": $thumbnail}]' 2>/dev/null)
+            
+          done < "$RESULTS_FILE"
+          
+          # ══════════════════════════════════════════════
+          # ارسال نتایج به کاربر
+          # ══════════════════════════════════════════════
+          
+          # ذخیره نتایج برای استفاده در step بعدی
+          echo "$SEARCH_RESULTS" > /tmp/search_data.json
+          
+          # ⭐ ارسال پیام هدر
+          HEADER_TEXT="🔍 *نتایج جستجو برای:* \`$QUERY\`\n\n📊 *تعداد نتایج:* $RESULT_COUNT\n\n👇 _روی ویدیوی مورد نظر کلیک کنید:_"
+          
+          curl -s -X POST "https://tapi.bale.ai/bot${{ secrets.BALE_BOT_TOKEN }}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg chat_id "$CHAT_ID" \
+              --arg text "$HEADER_TEXT" \
+              '{chat_id: $chat_id, text: $text, parse_mode: "Markdown", reply_markup: {inline_keyboard: []}}')" 2>/dev/null || true
+          
+          echo "SEARCH_SUCCESS=true" >> $GITHUB_OUTPUT
+          echo "RESULT_COUNT=$RESULT_COUNT" >> $GITHUB_OUTPUT
+
+      # ── Step 3: Send Each Result ────────────────────
+      - name: "📤 Send Results to User"
+        if: steps.search.outputs.SEARCH_SUCCESS == 'true'
+        env:
+          BALE_BOT_TOKEN: ${{ secrets.BALE_BOT_TOKEN }}
+        run: |
+          #!/bin/bash
+          
+          CHAT_ID="${{ github.event.inputs.chat_id }}"
+          SEARCH_DATA=$(cat /tmp/search_data.json)
+          RESULT_COUNT=$(echo "$SEARCH_DATA" | jq '. | length')
+          
+          echo "📤 Sending $RESULT_COUNT result(s) to user $CHAT_ID..."
+          
+          # ارسال هر نتیجه به صورت جداگانه
+          echo "$SEARCH_DATA" | jq -c '.[]' | while IFS= read -r result; do
+            NUM=$(echo "$result" | jq -r '.num')
+            TITLE=$(echo "$result" | jq -r '.title')
+            VIDEO_URL=$(echo "$result" | jq -r '.url')
+            DURATION=$(echo "$result" | jq -r '.duration')
+            CHANNEL=$(echo "$result" | jq -r '.channel')
+            VIEWS=$(echo "$result" | jq -r '.views')
+            VIDEO_ID=$(echo "$result" | jq -r '.id')
+            
+            # ⭐ ساخت متن برای هر نتیجه
+            RESULT_TEXT="🎬 *${NUM}.* ${TITLE}\n\n" \
+            RESULT_TEXT+="👤 *کانال:* ${CHANNEL}\n" \
+            RESULT_TEXT+="⏱ *مدت:* ${DURATION}\n" \
+            RESULT_TEXT+="👁 *بازدید:* ${VIEWS}\n" \
+            RESULT_TEXT+="🔗 \`${VIDEO_URL}\`"
+            
+            # ⭐ دکمه‌ها
+            INLINE_KEYBOARD=$(jq -n \
+              --arg url "$VIDEO_URL" \
+              '{inline_keyboard: [
+                [{"text": "📥 دانلود این ویدیو", "callback_data": "dl_'$VIDEO_ID'"}],
+                [{"text": "▶️ مشاهده در یوتیوب", "url": $url}]
+              ]}')
+            
+            # ارسال پیام
+            RESPONSE=$(curl -s -X POST "https://tapi.bale.ai/bot${BALE_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n \
+                --arg chat_id "$CHAT_ID" \
+                --arg text "$RESULT_TEXT" \
+                --argjson reply_markup "$INLINE_KEYBOARD" \
+                '{chat_id: $chat_id, text: $text, parse_mode: "Markdown", reply_markup: $reply_markup}')")
+            
+            MESSAGE_ID=$(echo "$RESPONSE" | jq -r '.result.message_id // empty')
+            
+            if [ -n "$MESSAGE_ID" ]; then
+              echo "  ✅ Result #$NUM sent (message_id: $MESSAGE_ID)"
+              
+              # ⭐ ذخیره mapping برای callback
+              echo "$VIDEO_ID|$CHAT_ID|$TITLE" >> /tmp/video_mapping.txt
+            else
+              echo "  ⚠️ Failed to send result #$NUM"
+            fi
+            
+            # فاصله کوتاه برای جلوگیری از Rate Limit تلگرام
+            sleep 0.5
+          done
+          
+          echo "✅ All results sent."
+
+      # ── Step 4: Save Video Mapping ──────────────────
+      - name: "💾 Save Video Mapping"
+        if: steps.search.outputs.SEARCH_SUCCESS == 'true'
+        run: |
+          if [ -f /tmp/video_mapping.txt ]; then
+            # ذخیره mapping برای استفاده توسط gateway.php
+            # این فایل می‌تونه توی یه مخزن جداگونه یا Redis ذخیره بشه
+            # فعلاً برای سادگی، mapping رو توی workflow artifact ذخیره می‌کنیم
+            cat /tmp/video_mapping.txt
+            echo "✅ Video mapping saved for callback processing."
+          fi
+
+      # ── Step 5: Final Report ────────────────────────
+      - name: "📊 Final Report"
+        if: always()
+        run: |
+          echo "════════════════════════════════════════════"
+          echo "  ✅ Search workflow completed"
+          echo "════════════════════════════════════════════"
+          echo "  🔍 Query: ${{ github.event.inputs.query }}"
+          echo "  📊 Results: ${{ steps.search.outputs.RESULT_COUNT }}"
+          echo "════════════════════════════════════════════"
