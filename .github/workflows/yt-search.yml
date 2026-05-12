@@ -189,10 +189,10 @@ jobs:
               UPLOAD_FORMATTED=""
             fi
             
-            # ⭐ توضیحات (۵۰ کاراکتر اول)
+            # ⭐ توضیحات (۱۲۰ کاراکتر اول)
             if [ -n "$DESCRIPTION" ] && [ "$DESCRIPTION" != "null" ]; then
-              DESC_SHORT=$(echo "$DESCRIPTION" | head -1 | cut -c1-60)
-              if [ ${#DESCRIPTION} -gt 60 ]; then
+              DESC_SHORT=$(echo "$DESCRIPTION" | head -1 | cut -c1-120)
+              if [ ${#DESCRIPTION} -gt 120 ]; then
                 DESC_SHORT="${DESC_SHORT}..."
               fi
             else
