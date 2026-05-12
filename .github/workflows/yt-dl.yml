@@ -1,7 +1,8 @@
 # ============================================================
 # yt-dl.yml — Bale YouTube Downloader (Serverless Edition)
-# V1.0
-# ارتقا یافته با قابلیت اتصال به ربات بله
+# V2.0 — Enhanced with Shecan DDNS + DNS Resolver + Cleanup Fix
+# Repository: Bale-YouTube-Downloader
+# تغییرات: افزودن مکانیزم Shecan, رفع باگ Cleanup, بهبود Gateway Sender
 # ============================================================
 
 name: "🎬 Bale YouTube Downloader"
@@ -91,6 +92,29 @@ jobs:
           git config --global pack.threads 1
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # ── Step 2.5: 🆕 ✅ NEW → 🧹 Pre-Cleanup Old Files (Force Delete via Git) ──
+      - name: "🧹 Pre-Cleanup: Auto-Delete Expired Videos (>5 min)"
+        run: |
+          echo "🧹 Checking for expired folders (>5 min old) BEFORE new download..."
+          if [ -d "videos" ]; then
+            OLD_FOLDERS=$(find videos -mindepth 1 -maxdepth 1 -type d -mmin +5 2>/dev/null || true)
+            if [ -n "$OLD_FOLDERS" ]; then
+              echo "$OLD_FOLDERS" | while read folder; do
+                echo "  🗑️ Removing: $folder"
+                rm -rf "$folder"
+              done
+              # Force sync deletion with GitHub
+              git add -A videos/
+              git commit -m "🧹 Auto-cleanup expired videos [skip ci]" --quiet || true
+              git push origin HEAD --quiet 2>&1 || echo "  (Push not critical, continuing)"
+              echo "✅ Expired folders deleted and synced."
+            else
+              echo "✅ No expired folders found (all are fresh)."
+            fi
+          else
+            echo "ℹ️ No videos directory yet, skipping cleanup."
+          fi
 
       # ── Step 3: Cloudflare WARP ───────────────────────
       - name: "🌐 Setup Cloudflare WARP"
@@ -565,15 +589,54 @@ jobs:
           echo "════════════════════════════════════════"
 
       # ╔══════════════════════════════════════════════════════╗
-      # ║  🔗 گام جدید: ارسال نتیجه به فایل gateway.php    ║
+      # ║  🆕✅ NEW: Shecan DDNS + Secure Gateway Sender    ║
       # ╚══════════════════════════════════════════════════════╝
-      - name: "📤 Send Result to Bale Gateway"
+      - name: "🔄 Shecan DDNS Update & Resolve"
         if: success() && env.USER_CHAT_ID != '' && env.BALE_GATEWAY_URL != ''
+        env:
+          SHECAN_PASSWORD: ${{ secrets.SHECAN_PASSWORD }}
+        run: |
+          # 1. به‌روزرسانی DDNS شکن (با کنترل 24 ساعته)
+          STATE_FILE="/tmp/shecan_state.txt"
+          CURRENT_TIME=$(date +%s)
+          LAST_UPDATE=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
+          
+          if [ $((CURRENT_TIME - LAST_UPDATE)) -gt 86400 ]; then
+            echo "🔄 Updating Shecan DDNS (last update > 24 hours)..."
+            curl -s "https://ddns.shecan.ir/update?password=${SHECAN_PASSWORD}" || echo "⚠️ DDNS update failed, continuing anyway..."
+            echo "$CURRENT_TIME" > "$STATE_FILE"
+            echo "✅ DDNS Updated."
+          else
+            echo "ℹ️ DDNS update not needed yet (last update was < 24 hours ago)."
+          fi
+          
+          # 2. حل DNS با DOH شکن
+          echo "🔍 Resolving DNS via Shecan DOH..."
+          DOMAIN=$(echo "${{ env.BALE_GATEWAY_URL }}" | awk -F/ '{print $3}')
+          RESOLVED_IP=$(curl -s "https://dns.shecan.ir/dns-query?name=${DOMAIN}&type=A" \
+            -H "accept: application/dns-json" | jq -r '.Answer[0].data // empty')
+          
+          if [ -z "$RESOLVED_IP" ]; then
+            echo "⚠️ Shecan DOH failed, falling back to standard DNS."
+            RESOLVED_IP=$(dig +short "$DOMAIN" @8.8.8.8 | head -1)
+          fi
+          
+          if [ -z "$RESOLVED_IP" ]; then
+            echo "❌ CRITICAL: Could not resolve IP for $DOMAIN. Cannot send to gateway."
+            exit 1
+          fi
+          
+          echo "🌐 Resolved IP for $DOMAIN: $RESOLVED_IP"
+          echo "RESOLVED_IP=$RESOLVED_IP" >> $GITHUB_ENV
+          echo "TARGET_DOMAIN=$DOMAIN" >> $GITHUB_ENV
+
+      - name: "📤 Send Result via Shecan IP"
+        if: success() && env.USER_CHAT_ID != '' && env.BALE_GATEWAY_URL != '' && env.RESOLVED_IP != ''
         env:
           GATEWAY_SECRET: ${{ secrets.GATEWAY_SECRET }}
         run: |
           #!/bin/bash
-          echo "📤 Preparing to send results to gateway..."
+          echo "📤 Preparing to send results to gateway via resolved IP..."
           GATEWAY_URL="${{ env.BALE_GATEWAY_URL }}"
           CHAT_ID="${{ env.USER_CHAT_ID }}"
           REPO_OWNER="${{ env.REPO_OWNER }}"
@@ -602,10 +665,12 @@ jobs:
           FILE_LIST_JSON+="]"
           
           echo "📊 Found $COUNT file(s). Sending to gateway..."
-          echo "   Links: $FILE_LIST_JSON"
+          echo "   Target: $GATEWAY_URL (resolved to ${{ env.RESOLVED_IP }})"
           
-          # ارسال درخواست POST به gateway.php
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GATEWAY_URL" \
+          # ارسال درخواست POST به gateway.php با استفاده از IP مستقیم و Shecan DOH
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
+            --resolve "${TARGET_DOMAIN}:443:${{ env.RESOLVED_IP }}" \
+            -X POST "$GATEWAY_URL" \
             -H "Content-Type: application/json" \
             -H "X-Gateway-Secret: $GATEWAY_SECRET" \
             -d "$(jq -n \
@@ -620,6 +685,23 @@ jobs:
             echo "✅ Result sent successfully to gateway."
           else
             echo "⚠️ Gateway responded with status: $RESPONSE"
+            echo "Attempting fallback without --resolve..."
+            RESPONSE_FALLBACK=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
+              -X POST "$GATEWAY_URL" \
+              -H "Content-Type: application/json" \
+              -H "X-Gateway-Secret: $GATEWAY_SECRET" \
+              -d "$(jq -n \
+                --arg chat_id "$CHAT_ID" \
+                --arg quality "$QUALITY" \
+                --arg subs "$SUBS" \
+                --arg title "دانلود موفق" \
+                --argjson files "$FILE_LIST_JSON" \
+                '{chat_id: $chat_id, quality: $quality, subs: $subs, title: $title, files: $files}')")
+            if [ "$RESPONSE_FALLBACK" = "200" ]; then
+              echo "✅ Fallback succeeded."
+            else
+              echo "⚠️ Fallback also failed with status: $RESPONSE_FALLBACK"
+            fi
           fi
           
           echo "════════════════════════════════════════"
