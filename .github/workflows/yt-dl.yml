@@ -87,7 +87,6 @@ jobs:
       - name: "⚙️ Configure Git"
         run: |
           cd /__w/Bale-YouTube-Downloader/Bale-YouTube-Downloader || cd /__w/*/Bale-YouTube-Downloader || true
-        run: |
           git config --global http.postBuffer 524288000
           git config --global http.maxRequestBuffer 100M
           git config --global core.compression 0
@@ -508,7 +507,6 @@ jobs:
         id: push
         run: |
           cd /__w/Bale-YouTube-Downloader/Bale-YouTube-Downloader || cd /__w/*/Bale-YouTube-Downloader || true
-        run: |
           #!/bin/bash
           BACKUP_DIR="${{ env.BACKUP_DIR }}"
           BRANCH="${{ env.BRANCH }}"
