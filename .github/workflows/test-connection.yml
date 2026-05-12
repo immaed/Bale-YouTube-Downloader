@@ -1,0 +1,28 @@
+name: "🧪 Connection Test"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Test Direct Connection"
+        run: |
+          echo "=== Test 1: Direct curl to khashayar.one ==="
+          curl -v --max-time 15 "https://khashayar.one/test-connection.php" 2>&1 || echo "DIRECT FAILED"
+          
+          echo ""
+          echo "=== Test 2: Ping khashayar.one ==="
+          ping -c 3 khashayar.one || echo "PING FAILED"
+          
+          echo ""
+          echo "=== Test 3: DNS Lookup ==="
+          nslookup khashayar.one || echo "DNS FAILED"
+          dig +short khashayar.one || echo "DIG FAILED"
+          
+          echo ""
+          echo "=== Test 4: Curl with Verbose ==="
+          curl -v --max-time 15 -X POST "https://khashayar.one/test-connection.php" \
+            -H "Content-Type: application/json" \
+            -d '{"test":"hello"}' 2>&1
