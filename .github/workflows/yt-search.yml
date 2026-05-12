@@ -1,6 +1,7 @@
 # ============================================================
-# yt-search.yml — Bale YouTube Search Engine V2
-# خروجی شکیل و حرفه‌ای با ایموجی و فرمت استاندارد فارسی
+# yt-search.yml — Bale YouTube Search Engine V3
+# خروجی نهایی با فرمت صحیح Markdown
+# رفع مشکل \n و duration، دکمه‌های کوتاه
 # ============================================================
 
 name: "🔍 YouTube Search"
@@ -50,34 +51,42 @@ jobs:
           BOT_TOKEN="${{ secrets.BALE_BOT_TOKEN }}"
           
           # ══════════════════════════════════════════════
-          # تابع کمکی برای ارسال پیام
+          # تابع ارسال پیام
           # ══════════════════════════════════════════════
           send_message() {
             local text="$1"
             local reply_markup="${2:-}"
             
+            # نوشتن payload در فایل برای حفظ newline‌های واقعی
             if [ -n "$reply_markup" ]; then
-              curl -s -X POST "https://tapi.bale.ai/bot${BOT_TOKEN}/sendMessage" \
-                -H "Content-Type: application/json" \
-                -d "$(jq -n \
-                  --arg chat_id "$CHAT_ID" \
-                  --arg text "$text" \
-                  --argjson reply_markup "$reply_markup" \
-                  '{chat_id: $chat_id, text: $text, parse_mode: "Markdown", reply_markup: $reply_markup}')" > /dev/null 2>&1
+              jq -n \
+                --arg chat_id "$CHAT_ID" \
+                --arg text "$text" \
+                --argjson reply_markup "$reply_markup" \
+                '{chat_id: $chat_id, text: $text, parse_mode: "Markdown", reply_markup: $reply_markup}' \
+                > /tmp/payload.json
             else
-              curl -s -X POST "https://tapi.bale.ai/bot${BOT_TOKEN}/sendMessage" \
-                -H "Content-Type: application/json" \
-                -d "$(jq -n \
-                  --arg chat_id "$CHAT_ID" \
-                  --arg text "$text" \
-                  '{chat_id: $chat_id, text: $text, parse_mode: "Markdown"}')" > /dev/null 2>&1
+              jq -n \
+                --arg chat_id "$CHAT_ID" \
+                --arg text "$text" \
+                '{chat_id: $chat_id, text: $text, parse_mode: "Markdown"}' \
+                > /tmp/payload.json
             fi
+            
+            curl -s -X POST "https://tapi.bale.ai/bot${BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d @/tmp/payload.json > /dev/null 2>&1
           }
           
           # ══════════════════════════════════════════════
-          # مرحله ۱: ارسال پیام "در حال جستجو"
+          # مرحله ۱: پیام "در حال جستجو"
           # ══════════════════════════════════════════════
-          send_message "🔍 *در حال جستجو...*\n\n▫️ عبارت: \`${QUERY}\`\n▫️ در حال بررسی ${MAX_RESULTS} نتیجه برتر یوتیوب\n\n⏳ _لطفاً چند لحظه صبر کنید..._"
+          send_message "🔍 *در حال جستجو...*
+
+          ▫️ عبارت: \`${QUERY}\`
+          ▫️ در حال بررسی ${MAX_RESULTS} نتیجه برتر
+
+          ⏳ _لطفاً چند لحظه صبر کنید..._"
           
           # ══════════════════════════════════════════════
           # مرحله ۲: اجرای جستجو
@@ -96,21 +105,30 @@ jobs:
           RESULT_COUNT=$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)
           
           if [ "$RESULT_COUNT" -eq 0 ]; then
-            send_message "❌ *نتیجه‌ای یافت نشد!*\n\nبرای عبارت: \`${QUERY}\`\nهیچ ویدیویی پیدا نکردم.\n\n💡 _لطفاً عبارت دیگری را امتحان کنید یا املای کلمات را بررسی کنید._"
+            send_message "❌ *نتیجه‌ای یافت نشد!*
+
+          برای عبارت: \`${QUERY}\`
+          هیچ ویدیویی پیدا نکردم.
+
+          💡 _لطفاً عبارت دیگری را امتحان کنید._"
             exit 0
           fi
           
           # ══════════════════════════════════════════════
-          # مرحله ۳: ساخت پیام اصلی نتایج
+          # مرحله ۳: ساخت پیام اصلی
           # ══════════════════════════════════════════════
           
           # ⭐ هدر
-          HEADER="🔍 *نتایج جستجو*\n\n"
-          HEADER+="▫️ *عبارت:* \`${QUERY}\`\n"
-          HEADER+="▫️ *تعداد نتایج:* ${RESULT_COUNT} ویدیو\n\n"
-          HEADER+="━━━━━━━━━━━━━━━━━━━━━\n\n"
+          HEADER="🔍 *نتایج جستجو*
+
+          ▫️ *عبارت:* \`${QUERY}\`
+          ▫️ *تعداد نتایج:* ${RESULT_COUNT} ویدیو
+
+          ━━━━━━━━━━━━━━━━━━━━━
+
+          "
           
-          # ⭐ ساخت لیست نتایج برای نمایش
+          # ⭐ ساخت لیست نتایج
           BODY=""
           LINE_NUM=0
           
@@ -157,25 +175,28 @@ jobs:
               *) NUM_ICON="${LINE_NUM}." ;;
             esac
             
-            # ⭐ عنوان کوتاه شده (حداکثر ۶۰ کاراکتر)
-            if [ ${#TITLE} -gt 60 ]; then
-              DISPLAY_TITLE="${TITLE:0:57}..."
+            # ⭐ عنوان کوتاه شده
+            if [ ${#TITLE} -gt 55 ]; then
+              DISPLAY_TITLE="${TITLE:0:52}..."
             else
               DISPLAY_TITLE="$TITLE"
             fi
             
             # ⭐ ساخت هر آیتم
-            BODY+="${NUM_ICON} *${DISPLAY_TITLE}*\n"
-            BODY+="   👤 ${CHANNEL}\n"
-            BODY+="   ⏱ ${DURATION_FORMATTED}  |  👁 ${VIEW_COUNT_FORMATTED}\n"
-            BODY+="   🔗 \`/dl_${VIDEO_ID}\`\n\n"
+            BODY+="${NUM_ICON} *${DISPLAY_TITLE}*
+               👤 ${CHANNEL}
+               ⏱ ${DURATION_FORMATTED}  |  👁 ${VIEW_COUNT_FORMATTED}
+
+          "
             
           done < "$RESULTS_FILE"
           
           # ⭐ فوتر
-          FOOTER="━━━━━━━━━━━━━━━━━━━━━\n\n"
-          FOOTER+="👇 *برای دانلود، روی دکمه زیر هر ویدیو کلیک کنید.*\n\n"
-          FOOTER+="💡 _با ارسال دوباره عبارت، جستجوی جدید انجام دهید._"
+          FOOTER="━━━━━━━━━━━━━━━━━━━━━
+
+          👇 *برای دانلود، روی دکمه زیر کلیک کنید.*
+
+          💡 _با ارسال دوباره عبارت، جستجوی جدید انجام دهید._"
           
           # ⭐ پیام کامل
           FULL_MESSAGE="${HEADER}${BODY}${FOOTER}"
@@ -184,7 +205,6 @@ jobs:
           # مرحله ۴: ساخت دکمه‌های دانلود
           # ══════════════════════════════════════════════
           
-          # ساخت inline_keyboard
           INLINE_KEYBOARD='{"inline_keyboard":['
           
           LINE_NUM=0
@@ -197,9 +217,9 @@ jobs:
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             
-            # عنوان کوتاه برای دکمه (حداکثر ۴۰ کاراکتر)
-            if [ ${#TITLE} -gt 40 ]; then
-              BTN_TITLE="${TITLE:0:37}..."
+            # ⭐ عنوان کوتاه برای دکمه (حداکثر ۳۰ کاراکتر)
+            if [ ${#TITLE} -gt 30 ]; then
+              BTN_TITLE="${TITLE:0:27}..."
             else
               BTN_TITLE="$TITLE"
             fi
@@ -212,7 +232,8 @@ jobs:
               INLINE_KEYBOARD+=','
             fi
             
-            INLINE_KEYBOARD+='[{"text":"📥 '"${BTN_TITLE}"'","url":"'"${VIDEO_URL}"'"}]'
+            # ⭐ هر دکمه یه ردیف جداگونه
+            INLINE_KEYBOARD+='[{"text":"📥 '"${LINE_NUM}"'. '"${BTN_TITLE}"'","url":"'"${VIDEO_URL}"'"}]'
             
           done < "$RESULTS_FILE"
           
