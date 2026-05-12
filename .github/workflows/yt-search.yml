@@ -223,8 +223,9 @@ jobs:
           
           FULL_MESSAGE="${HEADER}$(cat ${BODY_FILE})${FOOTER}"
           
-          # ساخت دکمه‌ها
-          INLINE_KEYBOARD='{"inline_keyboard":['
+          # ساخت دکمه‌ها — استفاده از فایل موقت برای جلوگیری از خطای sh
+          KEYBOARD_FILE="/tmp/keyboard.json"
+          echo '{"inline_keyboard":[' > "$KEYBOARD_FILE"
           
           LINE_NUM=0
           FIRST=true
@@ -244,14 +245,19 @@ jobs:
             if [ "$FIRST" = true ]; then
               FIRST=false
             else
-              INLINE_KEYBOARD+=','
+              echo ',' >> "$KEYBOARD_FILE"
             fi
             
-            INLINE_KEYBOARD+='[{"text":"📥 '"${BTN_TITLE}"'","callback_data":"dl_'${VIDEO_ID}'"}]'
+            jq -n \
+              --arg text "📥 ${BTN_TITLE}" \
+              --arg data "dl_${VIDEO_ID}" \
+              '[{"text": $text, "callback_data": $data}]' >> "$KEYBOARD_FILE"
             
           done < "$RESULTS_FILE"
           
-          INLINE_KEYBOARD+=']}'
+          echo ']}' >> "$KEYBOARD_FILE"
+          
+          INLINE_KEYBOARD=$(cat "$KEYBOARD_FILE")
           
           send_message "$FULL_MESSAGE" "$INLINE_KEYBOARD"
           
