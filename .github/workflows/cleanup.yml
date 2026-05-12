@@ -2,16 +2,14 @@
 # cleanup.yml — Bale YouTube Downloader
 # پاکسازی خودکار فایل‌های قدیمی‌تر از ۵ دقیقه
 # اجرا: هر ۵ دقیقه + امکان اجرای دستی
+# V2: Fix age calculation (use git log instead of find)
 # ============================================================
 
 name: "🧹 Auto Cleanup Old Videos"
 
 on:
-  # اجرای خودکار هر ۵ دقیقه
   schedule:
     - cron: '*/5 * * * *'
-  
-  # امکان اجرای دستی
   workflow_dispatch:
 
 permissions:
@@ -25,27 +23,23 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      # ── Step 1: Checkout ──────────────────────────────
       - name: "📥 Checkout Repository"
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # ── Step 2: Git Config ────────────────────────────
       - name: "⚙️ Configure Git"
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # ── Step 3: Pull latest changes ───────────────────
       - name: "🔄 Pull Latest Changes"
         run: |
           git fetch origin main --quiet
           git reset --hard origin/main --quiet
           echo "✅ Synced with remote"
 
-      # ── Step 4: حذف پوشه‌های قدیمی ──────────────────
       - name: "🗑️ Delete Folders Older Than 5 Minutes"
         id: cleanup
         run: |
@@ -54,13 +48,13 @@ jobs:
           
           DELETED_COUNT=0
           KEPT_COUNT=0
+          CURRENT_TIME=$(date +%s)
           
           if [ -d "videos" ]; then
-            # پیدا کردن همه پوشه‌ها (نه فایل‌ها) در videos/
-            for FOLDER in $(find videos -mindepth 1 -maxdepth 1 -type d); do
+            for FOLDER in videos/*/; do
+              [ -d "$FOLDER" ] || continue
               FOLDER_NAME=$(basename "$FOLDER")
               
-              # بررسی وضعیت از فایل status.json (اگر وجود دارد)
               STATUS_FILE="$FOLDER/status.json"
               STATUS="unknown"
               
@@ -68,33 +62,37 @@ jobs:
                 STATUS=$(jq -r '.status // "unknown"' "$STATUS_FILE" 2>/dev/null || echo "unknown")
               fi
               
-              # محاسبه عمر پوشه (بر اساس آخرین commit مرتبط)
-              # اگر وضعیت 'sent' باشد و پوشه قدیمی باشد -> حذف
-              # اگر پوشه خیلی قدیمی باشد (بیش از ۱۰ دقیقه) -> حذف
+              # استفاده از git log برای محاسبه سن واقعی
+              LAST_COMMIT_TIME=$(git log -1 --format=%at -- "videos/$FOLDER_NAME" 2>/dev/null || echo 0)
               
-              FOLDER_AGE_MINUTES=$(find "$FOLDER" -maxdepth 1 -type d -printf '%T@\n' | sort -n | head -1 | awk '{print int((systime() - $1) / 60)}' 2>/dev/null || echo 0)
+              if [ "$LAST_COMMIT_TIME" -eq 0 ]; then
+                LAST_COMMIT_TIME=$(stat -c %Y "$FOLDER" 2>/dev/null || echo 0)
+              fi
+              
+              if [ "$LAST_COMMIT_TIME" -gt 0 ]; then
+                FOLDER_AGE_MINUTES=$(( (CURRENT_TIME - LAST_COMMIT_TIME) / 60 ))
+              else
+                FOLDER_AGE_MINUTES=0
+              fi
               
               SHOULD_DELETE=false
+              REASON=""
               
-              # شرط ۱: وضعیت 'sent' و قدیمی‌تر از ۵ دقیقه
               if [ "$STATUS" = "sent" ] && [ "$FOLDER_AGE_MINUTES" -gt 5 ]; then
                 SHOULD_DELETE=true
                 REASON="Status is 'sent' and age is ${FOLDER_AGE_MINUTES}min"
               fi
               
-              # شرط ۲: وضعیت 'ready' اما خیلی قدیمی (بیش از ۳۰ دقیقه) — احتمالاً خطا
               if [ "$STATUS" = "ready" ] && [ "$FOLDER_AGE_MINUTES" -gt 30 ]; then
                 SHOULD_DELETE=true
-                REASON="Status stuck at 'ready' for ${FOLDER_AGE_MINUTES}min (likely error)"
+                REASON="Status stuck at 'ready' for ${FOLDER_AGE_MINUTES}min"
               fi
               
-              # شرط ۳: بدون status.json و قدیمی‌تر از ۱۵ دقیقه
               if [ ! -f "$STATUS_FILE" ] && [ "$FOLDER_AGE_MINUTES" -gt 15 ]; then
                 SHOULD_DELETE=true
                 REASON="No status.json and age is ${FOLDER_AGE_MINUTES}min"
               fi
               
-              # شرط ۴: وضعیت 'error' یا 'failed'
               if [ "$STATUS" = "error" ] || [ "$STATUS" = "failed" ]; then
                 SHOULD_DELETE=true
                 REASON="Status is '$STATUS'"
@@ -110,7 +108,7 @@ jobs:
               fi
             done
           else
-            echo "ℹ️ No videos directory found. Nothing to clean."
+            echo "ℹ️ No videos directory found."
           fi
           
           echo ""
@@ -123,7 +121,6 @@ jobs:
           echo "DELETED_COUNT=$DELETED_COUNT" >> $GITHUB_OUTPUT
           echo "KEPT_COUNT=$KEPT_COUNT" >> $GITHUB_OUTPUT
 
-      # ── Step 5: Commit & Push (if deletions happened) ──
       - name: "📤 Commit & Push Cleanup"
         if: steps.cleanup.outputs.DELETED_COUNT != '0'
         run: |
@@ -132,9 +129,8 @@ jobs:
           
           git add -A videos/
           
-          # فقط اگر تغییری وجود دارد commit کن
           if git diff --cached --quiet; then
-            echo "ℹ️ No changes to commit (files already deleted from remote?)"
+            echo "ℹ️ No changes to commit"
             exit 0
           fi
           
@@ -145,10 +141,9 @@ jobs:
             exit 0
           }
           
-          # تلاش برای push (با ۳ بار تلاش مجدد)
           for i in 1 2 3; do
             if timeout 60 git push origin main 2>&1; then
-              echo "✅ Cleanup pushed successfully (attempt $i)"
+              echo "✅ Cleanup pushed (attempt $i)"
               exit 0
             else
               if [ $i -lt 3 ]; then
@@ -160,9 +155,8 @@ jobs:
             fi
           done
           
-          echo "⚠️ Push failed after 3 attempts. Will try again next cycle."
+          echo "⚠️ Push failed after 3 attempts"
 
-      # ── Step 6: گزارش نهایی ──────────────────────────
       - name: "📊 Final Report"
         if: always()
         run: |
