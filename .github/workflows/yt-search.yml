@@ -139,21 +139,24 @@ jobs:
           ⏳ _لطفاً چند لحظه صبر کنید..._"
           
           # ══════════════════════════════════════════════
-          # مرحله ۲: اجرای جستجو (بدون flat-playlist)
+          # مرحله ۲: اجرای جستجو (دو مرحله‌ای)
           # ══════════════════════════════════════════════
-          RESULTS_FILE="/tmp/search_results.json"
+          
+          # مرحله ۲-الف: جستجوی سریع برای گرفتن ID ها
+          IDS_FILE="/tmp/video_ids.txt"
           
           yt-dlp \
             "ytsearch${MAX_RESULTS}:${QUERY}" \
-            --dump-json \
+            --get-id \
             --no-playlist \
             --no-check-certificates \
             --skip-download \
-            2>/dev/null > "$RESULTS_FILE" || true
+            --flat-playlist \
+            2>/dev/null > "$IDS_FILE" || true
           
-          RESULT_COUNT=$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)
+          IDS_COUNT=$(wc -l < "$IDS_FILE" 2>/dev/null || echo 0)
           
-          if [ "$RESULT_COUNT" -eq 0 ]; then
+          if [ "$IDS_COUNT" -eq 0 ]; then
             send_message "❌ *نتیجه‌ای یافت نشد!*
 
           برای عبارت: \`${QUERY}\`
@@ -162,6 +165,44 @@ jobs:
           💡 _لطفاً عبارت دیگری را امتحان کنید._"
             exit 0
           fi
+          
+          echo "✅ Found $IDS_COUNT video IDs, fetching full details..."
+          
+          # مرحله ۲-ب: گرفتن اطلاعات کامل برای هر ID
+          RESULTS_FILE="/tmp/search_results.json"
+          > "$RESULTS_FILE"  # خالی کردن فایل
+          
+          SUCCESS_COUNT=0
+          while IFS= read -r video_id; do
+            [ -z "$video_id" ] && continue
+            
+            echo "  📥 Fetching details for: $video_id"
+            
+            # ⭐ با timeout 15 ثانیه برای هر ویدیو
+            timeout 15 yt-dlp \
+              "https://www.youtube.com/watch?v=${video_id}" \
+              --dump-json \
+              --no-playlist \
+              --no-check-certificates \
+              --skip-download \
+              2>/dev/null >> "$RESULTS_FILE" || echo "  ⚠️ Timeout for $video_id"
+            
+            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            
+          done < "$IDS_FILE"
+          
+          RESULT_COUNT=$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)
+          
+          if [ "$RESULT_COUNT" -eq 0 ]; then
+            send_message "❌ *خطا در دریافت اطلاعات!*
+
+          نتایج پیدا شد ولی اطلاعات کامل قابل دریافت نبود.
+
+          💡 _لطفاً دوباره تلاش کنید._"
+            exit 0
+          fi
+          
+          echo "✅ Successfully fetched $RESULT_COUNT full results."
           
           # ══════════════════════════════════════════════
           # مرحله ۳: ساخت پیام اصلی
