@@ -84,6 +84,7 @@ jobs:
 
       # ── Step 2: Git Config ────────────────────────────
       - name: "⚙️ Configure Git"
+        working-directory: /__w/Bale-YouTube-Downloader/Bale-YouTube-Downloader
         run: |
           git config --global http.postBuffer 524288000
           git config --global http.maxRequestBuffer 100M
@@ -503,6 +504,7 @@ jobs:
       # ── Step 9: Push + Status.json ────────────────────
       - name: "📤 Push to Repository & Save Status"
         id: push
+        working-directory: /__w/Bale-YouTube-Downloader/Bale-YouTube-Downloader
         run: |
           #!/bin/bash
           BACKUP_DIR="${{ env.BACKUP_DIR }}"
