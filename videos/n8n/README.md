@@ -11,7 +11,7 @@
 | Property | Value |
 |----------|-------|
 | **Title** | `n8n` |
-| **Source** | [YouTube](https://www.youtube.com/watch?v=76071diENqY) |
+| **Source** | [YouTube](https://www.youtube.com/watch?v=bZvURnOcLa4) |
 | **Quality** | best |
 | **Status** | ✅ Complete |
 | **Password** | ❌ No |
