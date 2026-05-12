@@ -1,7 +1,6 @@
 # ============================================================
-# yt-search.yml — Bale YouTube Search Engine V3
-# خروجی نهایی با فرمت صحیح Markdown
-# رفع مشکل \n و duration، دکمه‌های کوتاه
+# yt-search.yml — Bale YouTube Search Engine V4
+# نتایج تر و تمیز + دکمه‌های callback برای دانلود مستقیم
 # ============================================================
 
 name: "🔍 YouTube Search"
@@ -57,7 +56,6 @@ jobs:
             local text="$1"
             local reply_markup="${2:-}"
             
-            # نوشتن payload در فایل برای حفظ newline‌های واقعی
             if [ -n "$reply_markup" ]; then
               jq -n \
                 --arg chat_id "$CHAT_ID" \
@@ -118,7 +116,6 @@ jobs:
           # مرحله ۳: ساخت پیام اصلی
           # ══════════════════════════════════════════════
           
-          # ⭐ هدر
           HEADER="🔍 *نتایج جستجو*
 
           ▫️ *عبارت:* \`${QUERY}\`
@@ -128,7 +125,6 @@ jobs:
 
           "
           
-          # ⭐ ساخت لیست نتایج
           BODY=""
           LINE_NUM=0
           
@@ -185,24 +181,20 @@ jobs:
             # ⭐ ساخت هر آیتم
             BODY+="${NUM_ICON} *${DISPLAY_TITLE}*
                👤 ${CHANNEL}
-               ⏱ ${DURATION_FORMATTED}  |  👁 ${VIEW_COUNT_FORMATTED}
+               ⏱ ${DURATION_FORMATTED}  •  👁 ${VIEW_COUNT_FORMATTED}
 
           "
             
           done < "$RESULTS_FILE"
           
-          # ⭐ فوتر
           FOOTER="━━━━━━━━━━━━━━━━━━━━━
 
-          👇 *برای دانلود، روی دکمه زیر کلیک کنید.*
-
-          💡 _با ارسال دوباره عبارت، جستجوی جدید انجام دهید._"
+          👇 *برای دانلود هر ویدیو، روی دکمه آن کلیک کنید.*"
           
-          # ⭐ پیام کامل
           FULL_MESSAGE="${HEADER}${BODY}${FOOTER}"
           
           # ══════════════════════════════════════════════
-          # مرحله ۴: ساخت دکمه‌های دانلود
+          # مرحله ۴: ساخت دکمه‌های callback برای دانلود
           # ══════════════════════════════════════════════
           
           INLINE_KEYBOARD='{"inline_keyboard":['
@@ -217,14 +209,12 @@ jobs:
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             
-            # ⭐ عنوان کوتاه برای دکمه (حداکثر ۳۰ کاراکتر)
+            # ⭐ عنوان کوتاه برای دکمه (۳۰ کاراکتر)
             if [ ${#TITLE} -gt 30 ]; then
               BTN_TITLE="${TITLE:0:27}..."
             else
               BTN_TITLE="$TITLE"
             fi
-            
-            VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
             
             if [ "$FIRST" = true ]; then
               FIRST=false
@@ -232,8 +222,8 @@ jobs:
               INLINE_KEYBOARD+=','
             fi
             
-            # ⭐ هر دکمه یه ردیف جداگونه
-            INLINE_KEYBOARD+='[{"text":"📥 '"${LINE_NUM}"'. '"${BTN_TITLE}"'","url":"'"${VIDEO_URL}"'"}]'
+            # ⭐ دکمه با callback_data برای دانلود مستقیم
+            INLINE_KEYBOARD+='[{"text":"📥 '"${BTN_TITLE}"'","callback_data":"dl_'${VIDEO_ID}'"}]'
             
           done < "$RESULTS_FILE"
           
