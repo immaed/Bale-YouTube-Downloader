@@ -1,6 +1,7 @@
 # ============================================================
-# yt-search.yml — Bale YouTube Search Engine V5
-# نتایج کامل + لینک یوتیوب + حذف duration ناقص
+# yt-search.yml — Bale YouTube Search Engine V6 (Final)
+# جستجوی کامل با تمام جزئیات + تاریخ شمسی + دکمه دانلود
+# بدون --flat-playlist برای دریافت اطلاعات کامل
 # ============================================================
 
 name: "🔍 YouTube Search"
@@ -17,7 +18,7 @@ on:
         required: true
         type: string
       max_results:
-        description: "تعداد نتایج"
+        description: "تعداد نتایج (۱ تا ۱۰)"
         required: false
         type: string
         default: "5"
@@ -26,7 +27,7 @@ jobs:
   search:
     name: "🔎 Search & Display"
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     permissions:
       contents: read
 
@@ -48,6 +49,10 @@ jobs:
           CHAT_ID="${{ github.event.inputs.chat_id }}"
           MAX_RESULTS="${{ github.event.inputs.max_results }}"
           BOT_TOKEN="${{ secrets.BALE_BOT_TOKEN }}"
+          
+          # ══════════════════════════════════════════════
+          # توابع کمکی
+          # ══════════════════════════════════════════════
           
           send_message() {
             local text="$1"
@@ -73,6 +78,56 @@ jobs:
               -d @/tmp/payload.json > /dev/null 2>&1
           }
           
+          # ⭐ فرمت اعداد بزرگ
+          format_number() {
+            local num=$1
+            if [ -z "$num" ] || [ "$num" = "null" ] || [ "$num" -eq 0 ] 2>/dev/null; then
+              echo "نامشخص"
+            elif [ "$num" -gt 1000000000 ] 2>/dev/null; then
+              echo "scale=1; $num / 1000000000" | bc 2>/dev/null | sed 's/\.0$//'
+              echo " میلیارد"
+            elif [ "$num" -gt 1000000 ] 2>/dev/null; then
+              echo "scale=1; $num / 1000000" | bc 2>/dev/null | sed 's/\.0$//'
+              echo " میلیون"
+            elif [ "$num" -gt 1000 ] 2>/dev/null; then
+              echo "scale=1; $num / 1000" | bc 2>/dev/null | sed 's/\.0$//'
+              echo " هزار"
+            else
+              echo "$num"
+            fi
+          }
+          
+          # ⭐ تبدیل تاریخ میلادی به شمسی (تقریبی)
+          gregorian_to_jalali() {
+            local date_str="$1"
+            if [ -z "$date_str" ] || [ ${#date_str} -ne 8 ]; then
+              echo "نامشخص"
+              return
+            fi
+            
+            local year=${date_str:0:4}
+            local month=${date_str:4:2}
+            local day=${date_str:6:2}
+            
+            # محاسبه تقریبی (اختلاف ثابت)
+            local gy=$((year - 621))
+            local gm=$month
+            local gd=$day
+            
+            # اگر ماه میلادی از ۳ بیشتره (مارس)
+            if [ "$gm" -gt 3 ]; then
+              echo "${gy}/$((gm - 3))/$gd (شمسی)"
+            elif [ "$gm" -eq 3 ] && [ "$gd" -ge 21 ]; then
+              echo "${gy}/1/$((gd - 20)) (شمسی)"
+            elif [ "$gm" -eq 3 ]; then
+              echo "$((gy - 1))/12/$((gd + 10)) (شمسی)"
+            elif [ "$gm" -eq 2 ]; then
+              echo "$((gy - 1))/11/$((gd + 10)) (شمسی)"
+            else
+              echo "$((gy - 1))/10/$((gd + 11)) (شمسی)"
+            fi
+          }
+          
           # ══════════════════════════════════════════════
           # مرحله ۱: پیام "در حال جستجو"
           # ══════════════════════════════════════════════
@@ -84,7 +139,7 @@ jobs:
           ⏳ _لطفاً چند لحظه صبر کنید..._"
           
           # ══════════════════════════════════════════════
-          # مرحله ۲: اجرای جستجو
+          # مرحله ۲: اجرای جستجو (بدون flat-playlist)
           # ══════════════════════════════════════════════
           RESULTS_FILE="/tmp/search_results.json"
           
@@ -94,7 +149,6 @@ jobs:
             --no-playlist \
             --no-check-certificates \
             --skip-download \
-            --flat-playlist \
             2>/dev/null > "$RESULTS_FILE" || true
           
           RESULT_COUNT=$(wc -l < "$RESULTS_FILE" 2>/dev/null || echo 0)
@@ -129,25 +183,51 @@ jobs:
             [ -z "$line" ] && continue
             LINE_NUM=$((LINE_NUM + 1))
             
+            # ⭐ استخراج تمام فیلدها
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
-            CHANNEL=$(echo "$line" | jq -r '.channel // .uploader // "نامشخص"')
-            VIEW_COUNT=$(echo "$line" | jq -r '.view_count // 0')
             VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
+            CHANNEL=$(echo "$line" | jq -r '.channel // .uploader // "نامشخص"')
+            CHANNEL_URL=$(echo "$line" | jq -r '.channel_url // ""')
             
-            # ⭐ فرمت view count
-            if [ "$VIEW_COUNT" -gt 1000000000 ] 2>/dev/null; then
-              VIEWS=$(echo "scale=1; $VIEW_COUNT / 1000000000" | bc 2>/dev/null || echo "?")
-              VIEW_COUNT_FORMATTED="${VIEWS} میلیارد"
-            elif [ "$VIEW_COUNT" -gt 1000000 ] 2>/dev/null; then
-              VIEWS=$(echo "scale=1; $VIEW_COUNT / 1000000" | bc 2>/dev/null || echo "?")
-              VIEW_COUNT_FORMATTED="${VIEWS} میلیون"
-            elif [ "$VIEW_COUNT" -gt 1000 ] 2>/dev/null; then
-              VIEWS=$(echo "scale=1; $VIEW_COUNT / 1000" | bc 2>/dev/null || echo "?")
-              VIEW_COUNT_FORMATTED="${VIEWS} هزار"
+            # ⭐ آمار
+            VIEW_COUNT=$(echo "$line" | jq -r '.view_count // 0')
+            LIKE_COUNT=$(echo "$line" | jq -r '.like_count // 0')
+            COMMENT_COUNT=$(echo "$line" | jq -r '.comment_count // 0')
+            
+            # ⭐ اطلاعات کانال
+            SUBS=$(echo "$line" | jq -r '.channel_follower_count // 0')
+            
+            # ⭐ زمان
+            DURATION=$(echo "$line" | jq -r '.duration // 0')
+            UPLOAD_DATE=$(echo "$line" | jq -r '.upload_date // ""')
+            
+            # ⭐ کیفیت و حجم
+            AGE_LIMIT=$(echo "$line" | jq -r '.age_limit // 0')
+            IS_LIVE=$(echo "$line" | jq -r '.is_live // false')
+            
+            # ⭐ دسته‌بندی
+            CATEGORIES=$(echo "$line" | jq -r '.categories // [] | join(", ")')
+            TAGS=$(echo "$line" | jq -r '.tags // [] | .[:3] | join(", ")')
+            
+            # ⭐ فرمت‌ها
+            VIEW_COUNT_FORMATTED=$(format_number $VIEW_COUNT)
+            LIKE_COUNT_FORMATTED=$(format_number $LIKE_COUNT)
+            SUBS_FORMATTED=$(format_number $SUBS)
+            
+            # فرمت duration
+            if [ "$IS_LIVE" = "true" ]; then
+              DURATION_FORMATTED="🔴 پخش زنده"
+            elif [ "$DURATION" -gt 0 ] 2>/dev/null; then
+              M=$((DURATION / 60))
+              S=$((DURATION % 60))
+              DURATION_FORMATTED="${M}:$(printf '%02d' $S)"
             else
-              VIEW_COUNT_FORMATTED="${VIEW_COUNT}"
+              DURATION_FORMATTED="نامشخص"
             fi
+            
+            # تاریخ شمسی
+            JALALI_DATE=$(gregorian_to_jalali "$UPLOAD_DATE")
             
             # ⭐ آیکون شماره
             case $LINE_NUM in
@@ -156,14 +236,58 @@ jobs:
               3) NUM_ICON="3️⃣" ;;
               4) NUM_ICON="4️⃣" ;;
               5) NUM_ICON="5️⃣" ;;
+              6) NUM_ICON="6️⃣" ;;
+              7) NUM_ICON="7️⃣" ;;
+              8) NUM_ICON="8️⃣" ;;
+              9) NUM_ICON="9️⃣" ;;
+              10) NUM_ICON="🔟" ;;
               *) NUM_ICON="${LINE_NUM}." ;;
             esac
             
-            # ⭐ ساخت هر آیتم — فرمت نهایی
+            # ⭐ ساخت هر آیتم
             BODY+="${NUM_ICON} *${TITLE}*
             🔗 [مشاهده در یوتیوب](${VIDEO_URL})
-            👤 ${CHANNEL}
-            👁 ${VIEW_COUNT_FORMATTED}
+            👤 کانال: ${CHANNEL}"
+
+            # ⭐ سابسکرایبر (اگر موجود باشد)
+            if [ "$SUBS" -gt 0 ] 2>/dev/null; then
+              BODY+="
+            👥 سابسکرایبر: ${SUBS_FORMATTED}"
+            fi
+
+            # ⭐ آمار
+            BODY+="
+            ⏱ مدت: ${DURATION_FORMATTED}"
+
+            if [ "$IS_LIVE" != "true" ]; then
+              BODY+="
+            👁 بازدید: ${VIEW_COUNT_FORMATTED}"
+            fi
+            
+            if [ "$LIKE_COUNT" -gt 0 ] 2>/dev/null; then
+              BODY+="
+            👍 لایک: ${LIKE_COUNT_FORMATTED}"
+            fi
+            
+            # ⭐ تاریخ
+            if [ -n "$UPLOAD_DATE" ]; then
+              BODY+="
+            📅 تاریخ: ${JALALI_DATE}"
+            fi
+
+            # ⭐ دسته‌بندی (اگر موجود باشد)
+            if [ -n "$CATEGORIES" ] && [ "$CATEGORIES" != "[]" ]; then
+              BODY+="
+            📂 دسته: ${CATEGORIES}"
+            fi
+
+            # ⭐ رده سنی
+            if [ "$AGE_LIMIT" -gt 0 ] 2>/dev/null; then
+              BODY+="
+            🔞 رده سنی: +${AGE_LIMIT}"
+            fi
+
+            BODY+="
 
           "
             
