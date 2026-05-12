@@ -32,9 +32,10 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: "📦 Verify Dependencies"
+      - name: "📦 Verify & Install bash"
         run: |
-          echo "✅ Pre-installed in Docker image"
+          apt-get update -qq && apt-get install -y -qq bash
+          echo "✅ bash installed"
           yt-dlp --version
           jq --version
 
