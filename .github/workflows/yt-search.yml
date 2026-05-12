@@ -1,7 +1,5 @@
 # ============================================================
-# yt-search.yml — Bale YouTube Search Engine V7 (Stable)
-# جستجوی سریع و پایدار با flat-playlist
-# تمام فیلدهای قابل دسترس + فرمت تمیز
+# yt-search.yml — Bale YouTube Search Engine V7 (Stable + sh compatible)
 # ============================================================
 
 name: "🔍 YouTube Search"
@@ -32,7 +30,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: "📦 Verify & Install bash"
+      - name: "📦 Verify & Prepare"
         run: |
           apt-get update -qq && apt-get install -y -qq bash
           echo "✅ bash installed"
@@ -51,9 +49,6 @@ jobs:
           MAX_RESULTS="${{ github.event.inputs.max_results }}"
           BOT_TOKEN="${{ secrets.BALE_BOT_TOKEN }}"
           
-          # ══════════════════════════════════════════════
-          # تابع ارسال پیام
-          # ══════════════════════════════════════════════
           send_message() {
             local text="$1"
             local reply_markup="${2:-}"
@@ -78,7 +73,6 @@ jobs:
               -d @/tmp/payload.json > /dev/null 2>&1
           }
           
-          # ⭐ فرمت اعداد بزرگ
           format_number() {
             local num=$1
             if [ -z "$num" ] || [ "$num" = "null" ] || [ "$num" = "0" ] || [ "$num" -eq 0 ] 2>/dev/null; then
@@ -100,9 +94,6 @@ jobs:
             fi
           }
           
-          # ══════════════════════════════════════════════
-          # مرحله ۱: پیام "در حال جستجو"
-          # ══════════════════════════════════════════════
           send_message "🔍 *در حال جستجو...*
 
           ▫️ عبارت: \`${QUERY}\`
@@ -110,9 +101,6 @@ jobs:
 
           ⏳ _لطفاً چند لحظه صبر کنید..._"
           
-          # ══════════════════════════════════════════════
-          # مرحله ۲: اجرای جستجو
-          # ══════════════════════════════════════════════
           RESULTS_FILE="/tmp/search_results.json"
           
           yt-dlp \
@@ -132,33 +120,20 @@ jobs:
           برای عبارت: \`${QUERY}\`
           هیچ ویدیویی پیدا نکردم.
 
-          💡 _لطفاً عبارت دیگری را امتحان کنید یا املای کلمات را بررسی کنید._"
+          💡 _لطفاً عبارت دیگری را امتحان کنید._"
             exit 0
           fi
           
           echo "✅ Found $RESULT_COUNT results."
           
-          # ══════════════════════════════════════════════
-          # مرحله ۳: ساخت پیام اصلی
-          # ══════════════════════════════════════════════
-          
-          HEADER="🔍 *نتایج جستجو*
-
-          ▫️ *عبارت:* \`${QUERY}\`
-          ▫️ *تعداد نتایج:* ${RESULT_COUNT} ویدیو
-
-          ━━━━━━━━━━━━━━━━━━━━━
-
-          "
-          
-          BODY=""
+          BODY_FILE="/tmp/body.txt"
+          > "$BODY_FILE"
           LINE_NUM=0
-          
+
           while IFS= read -r line; do
             [ -z "$line" ] && continue
             LINE_NUM=$((LINE_NUM + 1))
             
-            # ⭐ استخراج فیلدهای در دسترس با flat-playlist
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
             VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
@@ -168,10 +143,8 @@ jobs:
             UPLOAD_DATE=$(echo "$line" | jq -r '.upload_date // ""')
             DESCRIPTION=$(echo "$line" | jq -r '.description // ""')
             
-            # ⭐ فرمت بازدید
             VIEW_COUNT_FORMATTED=$(format_number $VIEW_COUNT)
             
-            # ⭐ فرمت مدت زمان
             if [ "$DURATION" -gt 0 ] 2>/dev/null; then
               M=$((DURATION / 60))
               S=$((DURATION % 60))
@@ -180,7 +153,6 @@ jobs:
               DURATION_FORMATTED=""
             fi
             
-            # ⭐ فرمت تاریخ (نمایش ساده میلادی)
             if [ -n "$UPLOAD_DATE" ] && [ ${#UPLOAD_DATE} -eq 8 ]; then
               Y=${UPLOAD_DATE:0:4}
               M=${UPLOAD_DATE:4:2}
@@ -190,7 +162,6 @@ jobs:
               UPLOAD_FORMATTED=""
             fi
             
-            # ⭐ توضیحات (۱۲۰ کاراکتر اول)
             if [ -n "$DESCRIPTION" ] && [ "$DESCRIPTION" != "null" ]; then
               DESC_SHORT=$(echo "$DESCRIPTION" | head -1 | cut -c1-120)
               if [ ${#DESCRIPTION} -gt 120 ]; then
@@ -200,7 +171,6 @@ jobs:
               DESC_SHORT=""
             fi
             
-            # ⭐ آیکون شماره
             case $LINE_NUM in
               1) NUM_ICON="1️⃣" ;;
               2) NUM_ICON="2️⃣" ;;
@@ -215,42 +185,39 @@ jobs:
               *) NUM_ICON="${LINE_NUM}." ;;
             esac
             
-            # ⭐ ساخت هر آیتم
-            BODY+="${NUM_ICON} *${TITLE}*"
+            echo "${NUM_ICON} *${TITLE}*" >> "$BODY_FILE"
             
-            # توضیحات (اگر موجود باشد)
             if [ -n "$DESC_SHORT" ]; then
-              BODY+="
-            📝 ${DESC_SHORT}"
+              echo "  📝 ${DESC_SHORT}" >> "$BODY_FILE"
             fi
             
-            BODY+="
-            🔗 [مشاهده در یوتیوب](${VIDEO_URL})
-            👤 کانال: ${CHANNEL}"
+            echo "  🔗 [مشاهده در یوتیوب](${VIDEO_URL})" >> "$BODY_FILE"
+            echo "  👤 کانال: ${CHANNEL}" >> "$BODY_FILE"
             
-            # مدت زمان (اگر موجود باشد)
             if [ -n "$DURATION_FORMATTED" ]; then
-              BODY+="
-            ⏱ مدت: ${DURATION_FORMATTED}"
+              echo "  ⏱ مدت: ${DURATION_FORMATTED}" >> "$BODY_FILE"
             fi
             
-            # بازدید (اگر موجود باشد)
             if [ -n "$VIEW_COUNT_FORMATTED" ]; then
-              BODY+="
-            👁 بازدید: ${VIEW_COUNT_FORMATTED}"
+              echo "  👁 بازدید: ${VIEW_COUNT_FORMATTED}" >> "$BODY_FILE"
             fi
             
-            # تاریخ (اگر موجود باشد)
             if [ -n "$UPLOAD_FORMATTED" ]; then
-              BODY+="
-            📅 تاریخ: ${UPLOAD_FORMATTED}"
+              echo "  📅 تاریخ: ${UPLOAD_FORMATTED}" >> "$BODY_FILE"
             fi
 
-            BODY+="
-
-          "
+            echo "" >> "$BODY_FILE"
             
           done < "$RESULTS_FILE"
+
+          HEADER="🔍 *نتایج جستجو*
+
+          ▫️ *عبارت:* \`${QUERY}\`
+          ▫️ *تعداد نتایج:* ${RESULT_COUNT} ویدیو
+
+          ━━━━━━━━━━━━━━━━━━━━━
+
+          "
           
           FOOTER="━━━━━━━━━━━━━━━━━━━━━
 
@@ -258,12 +225,9 @@ jobs:
 
           💡 _با ارسال دوباره عبارت، جستجوی جدید انجام دهید._"
           
-          FULL_MESSAGE="${HEADER}${BODY}${FOOTER}"
+          FULL_MESSAGE="${HEADER}$(cat ${BODY_FILE})${FOOTER}"
           
-          # ══════════════════════════════════════════════
-          # مرحله ۴: ساخت دکمه‌های دانلود
-          # ══════════════════════════════════════════════
-          
+          # ساخت دکمه‌ها
           INLINE_KEYBOARD='{"inline_keyboard":['
           
           LINE_NUM=0
@@ -276,7 +240,6 @@ jobs:
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             
-            # ⭐ عنوان کوتاه برای دکمه (۳۰ کاراکتر)
             if [ ${#TITLE} -gt 30 ]; then
               BTN_TITLE="${TITLE:0:27}..."
             else
@@ -289,16 +252,11 @@ jobs:
               INLINE_KEYBOARD+=','
             fi
             
-            # ⭐ هر دکمه یه ردیف جداگونه با callback_data
             INLINE_KEYBOARD+='[{"text":"📥 '"${BTN_TITLE}"'","callback_data":"dl_'${VIDEO_ID}'"}]'
             
           done < "$RESULTS_FILE"
           
           INLINE_KEYBOARD+=']}'
-          
-          # ══════════════════════════════════════════════
-          # مرحله ۵: ارسال پیام نهایی
-          # ══════════════════════════════════════════════
           
           send_message "$FULL_MESSAGE" "$INLINE_KEYBOARD"
           
