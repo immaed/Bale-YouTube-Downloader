@@ -1,6 +1,6 @@
 # ============================================================
-# yt-search.yml — Bale YouTube Search Engine V4
-# نتایج تر و تمیز + دکمه‌های callback برای دانلود مستقیم
+# yt-search.yml — Bale YouTube Search Engine V5
+# نتایج کامل + لینک یوتیوب + حذف duration ناقص
 # ============================================================
 
 name: "🔍 YouTube Search"
@@ -49,9 +49,6 @@ jobs:
           MAX_RESULTS="${{ github.event.inputs.max_results }}"
           BOT_TOKEN="${{ secrets.BALE_BOT_TOKEN }}"
           
-          # ══════════════════════════════════════════════
-          # تابع ارسال پیام
-          # ══════════════════════════════════════════════
           send_message() {
             local text="$1"
             local reply_markup="${2:-}"
@@ -134,18 +131,9 @@ jobs:
             
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
-            DURATION=$(echo "$line" | jq -r '.duration // 0')
             CHANNEL=$(echo "$line" | jq -r '.channel // .uploader // "نامشخص"')
             VIEW_COUNT=$(echo "$line" | jq -r '.view_count // 0')
-            
-            # ⭐ فرمت duration
-            if [ "$DURATION" -gt 0 ] 2>/dev/null; then
-              MINUTES=$((DURATION / 60))
-              SECONDS=$((DURATION % 60))
-              DURATION_FORMATTED="${MINUTES}:$(printf '%02d' $SECONDS)"
-            else
-              DURATION_FORMATTED="زنده"
-            fi
+            VIDEO_URL="https://www.youtube.com/watch?v=${VIDEO_ID}"
             
             # ⭐ فرمت view count
             if [ "$VIEW_COUNT" -gt 1000000000 ] 2>/dev/null; then
@@ -171,17 +159,11 @@ jobs:
               *) NUM_ICON="${LINE_NUM}." ;;
             esac
             
-            # ⭐ عنوان کوتاه شده
-            if [ ${#TITLE} -gt 55 ]; then
-              DISPLAY_TITLE="${TITLE:0:52}..."
-            else
-              DISPLAY_TITLE="$TITLE"
-            fi
-            
-            # ⭐ ساخت هر آیتم
-            BODY+="${NUM_ICON} *${DISPLAY_TITLE}*
-               👤 ${CHANNEL}
-               ⏱ ${DURATION_FORMATTED}  •  👁 ${VIEW_COUNT_FORMATTED}
+            # ⭐ ساخت هر آیتم — فرمت نهایی
+            BODY+="${NUM_ICON} *${TITLE}*
+            🔗 \`${VIDEO_URL}\`
+            👤 ${CHANNEL}
+            👁 ${VIEW_COUNT_FORMATTED}
 
           "
             
@@ -209,7 +191,6 @@ jobs:
             VIDEO_ID=$(echo "$line" | jq -r '.id // .display_id // ""')
             TITLE=$(echo "$line" | jq -r '.title // "بدون عنوان"')
             
-            # ⭐ عنوان کوتاه برای دکمه (۳۰ کاراکتر)
             if [ ${#TITLE} -gt 30 ]; then
               BTN_TITLE="${TITLE:0:27}..."
             else
@@ -222,7 +203,6 @@ jobs:
               INLINE_KEYBOARD+=','
             fi
             
-            # ⭐ دکمه با callback_data برای دانلود مستقیم
             INLINE_KEYBOARD+='[{"text":"📥 '"${BTN_TITLE}"'","callback_data":"dl_'${VIDEO_ID}'"}]'
             
           done < "$RESULTS_FILE"
