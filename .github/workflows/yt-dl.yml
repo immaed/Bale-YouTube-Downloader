@@ -1,8 +1,9 @@
 # ============================================================
 # yt-dl.yml — Bale YouTube Downloader (Serverless Edition)
-# V2.0 — Enhanced with Shecan DDNS + DNS Resolver + Cleanup Fix
+# V3.0 Final — Polling Architecture
 # Repository: Bale-YouTube-Downloader
-# تغییرات: افزودن مکانیزم Shecan, رفع باگ Cleanup, بهبود Gateway Sender
+# تغییرات: حذف Shecan/Gateway Sender، افزودن status.json،
+#           حذف Pre-Cleanup (جایگزین با cleanup.yml)
 # ============================================================
 
 name: "🎬 Bale YouTube Downloader"
@@ -16,7 +17,7 @@ on:
         type: string
         default: ""
       quality:
-        description: "🎬 Video Quality (Internal Use)"
+        description: "🎬 Video Quality"
         required: false
         type: choice
         default: "best"
@@ -29,7 +30,7 @@ on:
           - 480
           - audio
       download_subtitles:
-        description: "📝 Download Subtitles (Internal Use)"
+        description: "📝 Download Subtitles (fa & en)"
         required: false
         type: boolean
         default: false
@@ -38,24 +39,23 @@ on:
         required: false
         type: string
         default: ""
-      # ⭐ ورودی‌های جدید برای اتصال به ربات
       user_chat_id:
         description: "🆔 User Chat ID for Bale Bot"
         required: false
         type: string
         default: ""
       bale_gateway_url:
-        description: "🔗 URL of gateway.php to notify the bot after completion"
+        description: "🔗 URL of gateway.php"
         required: false
         type: string
         default: ""
       user_friendly_quality:
-        description: "🌟 User-Friendly Quality Label (e.g., '1080p')"
+        description: "🌟 User-Friendly Quality Label"
         required: false
         type: string
         default: "best"
       user_friendly_subs:
-        description: "🌟 User-Friendly Subs Label (e.g., 'Enabled')"
+        description: "🌟 User-Friendly Subs Label"
         required: false
         type: string
         default: "Disabled"
@@ -92,29 +92,6 @@ jobs:
           git config --global pack.threads 1
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      # ── Step 2.5: 🆕 ✅ NEW → 🧹 Pre-Cleanup Old Files (Force Delete via Git) ──
-      - name: "🧹 Pre-Cleanup: Auto-Delete Expired Videos (>5 min)"
-        run: |
-          echo "🧹 Checking for expired folders (>5 min old) BEFORE new download..."
-          if [ -d "videos" ]; then
-            OLD_FOLDERS=$(find videos -mindepth 1 -maxdepth 1 -type d -mmin +5 2>/dev/null || true)
-            if [ -n "$OLD_FOLDERS" ]; then
-              echo "$OLD_FOLDERS" | while read folder; do
-                echo "  🗑️ Removing: $folder"
-                rm -rf "$folder"
-              done
-              # Force sync deletion with GitHub
-              git add -A videos/
-              git commit -m "🧹 Auto-cleanup expired videos [skip ci]" --quiet || true
-              git push origin HEAD --quiet 2>&1 || echo "  (Push not critical, continuing)"
-              echo "✅ Expired folders deleted and synced."
-            else
-              echo "✅ No expired folders found (all are fresh)."
-            fi
-          else
-            echo "ℹ️ No videos directory yet, skipping cleanup."
-          fi
 
       # ── Step 3: Cloudflare WARP ───────────────────────
       - name: "🌐 Setup Cloudflare WARP"
@@ -188,11 +165,9 @@ jobs:
             480) FORMAT="bestvideo[height<=480]+bestaudio/bestvideo[height<=480]*+bestaudio*/bestvideo+bestaudio/best" ;;
             *) FORMAT="bestvideo+bestaudio/bestvideo*+bestaudio*/best" ;;
           esac
-
+          
           echo "FORMAT=$FORMAT" >> $GITHUB_ENV
           echo "SPLIT_BYTES=$(( $SPLIT_SIZE_MB * 1024 * 1024 ))" >> $GITHUB_ENV
-          # ⭐ ذخیره متغیرهای دریافتی از ربات برای استفاده در گام نهایی
-          echo "BALE_GATEWAY_URL=${{ github.event.inputs.bale_gateway_url }}" >> $GITHUB_ENV
           echo "USER_CHAT_ID=${{ github.event.inputs.user_chat_id }}" >> $GITHUB_ENV
           echo "USER_FRIENDLY_QUALITY=${{ github.event.inputs.user_friendly_quality }}" >> $GITHUB_ENV
           echo "USER_FRIENDLY_SUBS=${{ github.event.inputs.user_friendly_subs }}" >> $GITHUB_ENV
@@ -218,7 +193,6 @@ jobs:
           mapfile -t URL_LIST < /tmp/url_list.txt
           TOTAL_URLS=${#URL_LIST[@]}
           
-          # ⭐ Robust sanitize — no sed errors
           sanitize_name() {
             local name="$1"
             name=$(echo "$name" | LC_ALL=C tr '[:space:]｜　' '---' | LC_ALL=C tr -c 'a-zA-Z0-9_-' '-' | tr -s '-' | sed 's/^-//;s/-$//')
@@ -329,7 +303,6 @@ jobs:
             TMP_DIR="tmp_dl_${URL_INDEX}_$$"
             mkdir -p "$TMP_DIR"
             
-            # نمایش فرمت‌های موجود برای debugging
             echo "🔍 Available formats:"
             yt-dlp -F --proxy "socks5://127.0.0.1:1080" --js-runtimes deno --remote-components ejs:github "$URL" 2>/dev/null || echo "  (could not list formats)"
             echo ""
@@ -339,7 +312,6 @@ jobs:
               if download_video $METHOD "$URL" "$TMP_DIR"; then
                 echo "  ✅ Downloaded (method $METHOD)!"
                 
-                # ⭐ Quality Gate — reject if resolution too low
                 QUALITY_OK=true
                 if [ "$QUALITY" != "best" ] && [ "$QUALITY" != "audio" ]; then
                   for DF in "$TMP_DIR"/*.mp4 "$TMP_DIR"/*.webm "$TMP_DIR"/*.mkv; do
@@ -363,7 +335,6 @@ jobs:
                 if [ "$QUALITY_OK" = true ]; then
                   DOWNLOAD_SUCCESS=true; break
                 else
-                  # Save thumbnail before retry
                   THUMB=$(ls "$TMP_DIR"/*.jpg 2>/dev/null | head -1)
                   [ -n "$THUMB" ] && [ -f "$THUMB" ] && cp "$THUMB" "/tmp/saved_thumb_${URL_INDEX}.jpg" 2>/dev/null
                 fi
@@ -399,7 +370,6 @@ jobs:
               FINAL_PATH="$BACKUP_DIR/$FINAL_FOLDER"
               mkdir -p "$FINAL_PATH"
               
-              # Thumbnail
               THUMB_FILE=$(ls "$TMP_DIR"/*.jpg 2>/dev/null | head -1)
               [ -z "$THUMB_FILE" ] && THUMB_FILE="/tmp/saved_thumb_${URL_INDEX}.jpg"
               if [ -n "$THUMB_FILE" ] && [ -f "$THUMB_FILE" ]; then
@@ -531,30 +501,16 @@ jobs:
         run: |
           docker stop warp 2>/dev/null || true
           docker rm warp 2>/dev/null || true
-          
-      # ── Step 8.5: Delete files older than 5 minutes ────
-      - name: "🗑️ Delete old video files (older than 5 minutes)"
-        if: always()
-        run: |
-          echo "🧹 Checking for old files..."
-          if [ -d "videos" ]; then
-            OLD_FOLDERS=$(find videos -mindepth 1 -maxdepth 1 -type d -mmin +5 2>/dev/null || true)
-            if [ -n "$OLD_FOLDERS" ]; then
-              echo "$OLD_FOLDERS" | while read folder; do
-                echo "  🗑️ Removing: $folder"
-                rm -rf "$folder"
-              done
-            fi
-          fi
-          
-      # ── Step 9: Push ──────────────────────────────────
-      - name: "📤 Push to Repository"
+
+      # ── Step 9: Push + Status.json ────────────────────
+      - name: "📤 Push to Repository & Save Status"
         id: push
         run: |
           #!/bin/bash
           BACKUP_DIR="${{ env.BACKUP_DIR }}"
           BRANCH="${{ env.BRANCH }}"
           DOWNLOADED_COUNT="${{ env.DOWNLOADED_COUNT }}"
+          CHAT_ID="${{ env.USER_CHAT_ID }}"
           
           if [ "$DOWNLOADED_COUNT" -eq 0 ] || [ ! -d "$BACKUP_DIR" ]; then
             echo "⚠️ No files to push"; exit 0
@@ -564,6 +520,24 @@ jobs:
           git reset --hard origin/"$BRANCH" --quiet
           mkdir -p videos
           cp -r "$BACKUP_DIR"/* videos/ 2>/dev/null || true
+          
+          # ⭐ CREATE STATUS.JSON FOR EACH FOLDER ⭐
+          if [ -n "$CHAT_ID" ]; then
+            echo "📝 Creating status.json files for polling..."
+            for FOLDER in videos/*/; do
+              [ -d "$FOLDER" ] || continue
+              FOLDER_NAME=$(basename "$FOLDER")
+              
+              STATUS_FILE="$FOLDER/status.json"
+              
+              # فقط اگر status.json وجود ندارد، بساز
+              if [ ! -f "$STATUS_FILE" ]; then
+                echo '{"chat_id":"'"$CHAT_ID"'","status":"ready","created_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","folder":"'"$FOLDER_NAME"'"}' > "$STATUS_FILE"
+                echo "  ✅ status.json created for: $FOLDER_NAME"
+              fi
+            done
+          fi
+          
           git add -f videos/
           
           if git diff --cached --quiet; then echo "No changes"; exit 0; fi
@@ -585,125 +559,5 @@ jobs:
           done
           
           echo "════════════════════════════════════════"
-          echo "  ✅ Complete | 🌐 $PROJECT_URL"
-          echo "════════════════════════════════════════"
-
-      # ╔══════════════════════════════════════════════════════╗
-      # ║  🆕✅ NEW: Shecan DDNS + Secure Gateway Sender    ║
-      # ╚══════════════════════════════════════════════════════╝
-      - name: "🔄 Shecan DDNS Update & Resolve"
-        if: success() && env.USER_CHAT_ID != '' && env.BALE_GATEWAY_URL != ''
-        env:
-          SHECAN_PASSWORD: ${{ secrets.SHECAN_PASSWORD }}
-        run: |
-          # 1. به‌روزرسانی DDNS شکن (با کنترل 24 ساعته)
-          STATE_FILE="/tmp/shecan_state.txt"
-          CURRENT_TIME=$(date +%s)
-          LAST_UPDATE=$(cat "$STATE_FILE" 2>/dev/null || echo 0)
-          
-          if [ $((CURRENT_TIME - LAST_UPDATE)) -gt 86400 ]; then
-            echo "🔄 Updating Shecan DDNS (last update > 24 hours)..."
-            curl -s "https://ddns.shecan.ir/update?password=${SHECAN_PASSWORD}" || echo "⚠️ DDNS update failed, continuing anyway..."
-            echo "$CURRENT_TIME" > "$STATE_FILE"
-            echo "✅ DDNS Updated."
-          else
-            echo "ℹ️ DDNS update not needed yet (last update was < 24 hours ago)."
-          fi
-          
-          # 2. حل DNS با DOH شکن
-          echo "🔍 Resolving DNS via Shecan DOH..."
-          DOMAIN=$(echo "${{ env.BALE_GATEWAY_URL }}" | awk -F/ '{print $3}')
-          RESOLVED_IP=$(curl -s "https://dns.shecan.ir/dns-query?name=${DOMAIN}&type=A" \
-            -H "accept: application/dns-json" | jq -r '.Answer[0].data // empty')
-          
-          if [ -z "$RESOLVED_IP" ]; then
-            echo "⚠️ Shecan DOH failed, falling back to standard DNS."
-            RESOLVED_IP=$(dig +short "$DOMAIN" @8.8.8.8 | head -1)
-          fi
-          
-          if [ -z "$RESOLVED_IP" ]; then
-            echo "❌ CRITICAL: Could not resolve IP for $DOMAIN. Cannot send to gateway."
-            exit 1
-          fi
-          
-          echo "🌐 Resolved IP for $DOMAIN: $RESOLVED_IP"
-          echo "RESOLVED_IP=$RESOLVED_IP" >> $GITHUB_ENV
-          echo "TARGET_DOMAIN=$DOMAIN" >> $GITHUB_ENV
-
-      - name: "📤 Send Result via Shecan IP"
-        if: success() && env.USER_CHAT_ID != '' && env.BALE_GATEWAY_URL != '' && env.RESOLVED_IP != ''
-        env:
-          GATEWAY_SECRET: ${{ secrets.GATEWAY_SECRET }}
-        run: |
-          #!/bin/bash
-          echo "📤 Preparing to send results to gateway via resolved IP..."
-          GATEWAY_URL="${{ env.BALE_GATEWAY_URL }}"
-          CHAT_ID="${{ env.USER_CHAT_ID }}"
-          REPO_OWNER="${{ env.REPO_OWNER }}"
-          REPO_NAME="${{ env.REPO_NAME }}"
-          BRANCH="${{ env.BRANCH }}"
-          QUALITY="${{ env.USER_FRIENDLY_QUALITY }}"
-          SUBS="${{ env.USER_FRIENDLY_SUBS }}"
-          
-          # ساخت آرایه JSON از لینک‌های دانلود
-          FILE_LIST_JSON="["
-          COUNT=0
-          
-          # فقط فایل‌های نهایی (mp4, zip, و غیره) را لیست می‌کنیم
-          for FILE in $(find videos -type f \( -name "*.mp4" -o -name "*.zip" \) -printf '%T@ %p\n' | sort -n | tail -10 | cut -d' ' -f2-); do
-            # حذف پیشوند videos/ برای ساخت URL
-            RELATIVE_PATH="${FILE#videos/}"
-            # ساخت لینک raw
-            RAW_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/videos/${RELATIVE_PATH}"
-            
-            if [ $COUNT -gt 0 ]; then
-              FILE_LIST_JSON+=","
-            fi
-            FILE_LIST_JSON+="\"${RAW_URL}\""
-            COUNT=$((COUNT + 1))
-          done
-          FILE_LIST_JSON+="]"
-          
-          echo "📊 Found $COUNT file(s). Sending to gateway..."
-          echo "   Target: $GATEWAY_URL (resolved to ${{ env.RESOLVED_IP }})"
-          
-          # ارسال درخواست POST به gateway.php با استفاده از IP مستقیم و Shecan DOH
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
-            --resolve "${TARGET_DOMAIN}:443:${{ env.RESOLVED_IP }}" \
-            -X POST "$GATEWAY_URL" \
-            -H "Content-Type: application/json" \
-            -H "X-Gateway-Secret: $GATEWAY_SECRET" \
-            -d "$(jq -n \
-              --arg chat_id "$CHAT_ID" \
-              --arg quality "$QUALITY" \
-              --arg subs "$SUBS" \
-              --arg title "دانلود موفق" \
-              --argjson files "$FILE_LIST_JSON" \
-              '{chat_id: $chat_id, quality: $quality, subs: $subs, title: $title, files: $files}')")
-          
-          if [ "$RESPONSE" = "200" ]; then
-            echo "✅ Result sent successfully to gateway."
-          else
-            echo "⚠️ Gateway responded with status: $RESPONSE"
-            echo "Attempting fallback without --resolve..."
-            RESPONSE_FALLBACK=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
-              -X POST "$GATEWAY_URL" \
-              -H "Content-Type: application/json" \
-              -H "X-Gateway-Secret: $GATEWAY_SECRET" \
-              -d "$(jq -n \
-                --arg chat_id "$CHAT_ID" \
-                --arg quality "$QUALITY" \
-                --arg subs "$SUBS" \
-                --arg title "دانلود موفق" \
-                --argjson files "$FILE_LIST_JSON" \
-                '{chat_id: $chat_id, quality: $quality, subs: $subs, title: $title, files: $files}')")
-            if [ "$RESPONSE_FALLBACK" = "200" ]; then
-              echo "✅ Fallback succeeded."
-            else
-              echo "⚠️ Fallback also failed with status: $RESPONSE_FALLBACK"
-            fi
-          fi
-          
-          echo "════════════════════════════════════════"
-          echo "  ✅ Workflow finished"
+          echo "  ✅ Complete — Ready for polling"
           echo "════════════════════════════════════════"
