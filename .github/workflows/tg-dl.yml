@@ -1,6 +1,6 @@
 # ============================================================
 # tg-dl.yml — Bale Telegram Downloader
-# V1.0 — warp-cli + Multi-Layer Fallback
+# V1.1 — Fixed YAML heredoc + Multi-Layer Fallback
 # Repository: Bale-YouTube-Downloader
 # ============================================================
 
@@ -125,10 +125,6 @@ jobs:
           START_FROM="${{ env.START_FROM }}"
           BACKUP_DIR="${{ env.BACKUP_DIR }}"
           
-          # ══════════════════════════════════════════════
-          # توابع کمکی
-          # ══════════════════════════════════════════════
-          
           sanitize_name() {
             local name="$1"
             name=$(echo "$name" | LC_ALL=C tr '[:space:]｜　' '---' | LC_ALL=C tr -c 'a-zA-Z0-9_-' '-' | tr -s '-' | sed 's/^-//;s/-$//')
@@ -151,11 +147,6 @@ jobs:
             fi
           }
           
-          # ══════════════════════════════════════════════
-          # تشخیص نوع محتوا از لینک
-          # ══════════════════════════════════════════════
-          
-          # استخراج نام کانال و شماره پست
           CHANNEL_NAME=$(echo "$TG_LINK" | grep -oP 't\.me/\K[^/]+' || echo "unknown")
           POST_ID=$(echo "$TG_LINK" | grep -oP '\d+$' || echo "")
           
@@ -169,7 +160,6 @@ jobs:
           if [ "$CONTENT_TYPE" != "text" ]; then
             echo "🎬 Downloading media with yt-dlp..."
             
-            # تنظیم فرمت بر اساس نوع محتوا
             case $CONTENT_TYPE in
               video) YT_FORMAT="bestvideo+bestaudio/best" ;;
               audio) YT_FORMAT="bestaudio/best" ;;
@@ -178,19 +168,16 @@ jobs:
               *) YT_FORMAT="best" ;;
             esac
             
-            # ⭐ ۶ متد دانلود برای تلگرام
             DOWNLOAD_SUCCESS=false
             TMP_DIR="/tmp/tg_tmp_$$"
             mkdir -p "$TMP_DIR"
             
-            # Method 1: yt-dlp direct
             echo "  🔄 Method 1: yt-dlp direct..."
             yt-dlp --no-playlist --playlist-items "${START_FROM}-$((START_FROM + MAX_ITEMS - 1))" \
               -f "$YT_FORMAT" -o "${TMP_DIR}/%(title)s.%(ext)s" \
               --no-progress --retries 5 --fragment-retries 5 \
               --no-check-certificates "$TG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
             
-            # Method 2: yt-dlp with iOS UA
             if [ "$DOWNLOAD_SUCCESS" = false ]; then
               echo "  🔄 Method 2: yt-dlp iOS..."
               yt-dlp --no-playlist --playlist-items "${START_FROM}-$((START_FROM + MAX_ITEMS - 1))" \
@@ -199,7 +186,6 @@ jobs:
                 --no-progress --retries 5 --no-check-certificates "$TG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
             fi
             
-            # Method 3: yt-dlp with cookies (if available)
             if [ "$DOWNLOAD_SUCCESS" = false ] && [ -f /tmp/youtube-cookies.txt ]; then
               echo "  🔄 Method 3: With cookies..."
               yt-dlp --no-playlist --playlist-items "${START_FROM}-$((START_FROM + MAX_ITEMS - 1))" \
@@ -208,7 +194,6 @@ jobs:
                 --no-progress --retries 5 --no-check-certificates "$TG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
             fi
             
-            # Method 4: yt-dlp with Android UA
             if [ "$DOWNLOAD_SUCCESS" = false ]; then
               echo "  🔄 Method 4: Android UA..."
               yt-dlp --no-playlist --playlist-items "${START_FROM}-$((START_FROM + MAX_ITEMS - 1))" \
@@ -217,7 +202,6 @@ jobs:
                 --no-progress --retries 5 --no-check-certificates "$TG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
             fi
             
-            # Method 5: yt-dlp force IPv4
             if [ "$DOWNLOAD_SUCCESS" = false ]; then
               echo "  🔄 Method 5: Force IPv4..."
               yt-dlp --no-playlist --playlist-items "${START_FROM}-$((START_FROM + MAX_ITEMS - 1))" \
@@ -225,7 +209,6 @@ jobs:
                 --force-ipv4 --no-progress --retries 10 --no-check-certificates "$TG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
             fi
             
-            # Method 6: yt-dlp no SSL check
             if [ "$DOWNLOAD_SUCCESS" = false ]; then
               echo "  🔄 Method 6: No SSL..."
               yt-dlp --no-playlist --playlist-items "${START_FROM}-$((START_FROM + MAX_ITEMS - 1))" \
@@ -236,7 +219,6 @@ jobs:
             if [ "$DOWNLOAD_SUCCESS" = true ]; then
               echo "✅ Media downloaded successfully!"
               
-              # انتقال فایل‌ها
               for FILE in "$TMP_DIR"/*; do
                 [ -f "$FILE" ] || continue
                 
@@ -250,40 +232,41 @@ jobs:
                 
                 cp "$FILE" "$FINAL_PATH/$BASENAME"
                 
-                # ساخت README
                 SIZE_FORMATTED=$(format_size $SIZE)
                 FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
                 FILE_ENCODED=$(urlencode "$BASENAME")
+                TITLE_NOEXT="${BASENAME%.*}"
+                RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/${FILE_ENCODED}"
                 
-                cat > "$FINAL_PATH/README.md" << 'README_EOF'
-# ${BASENAME%.*}
-
----
-
-## 📋 Content Information
-
-| Property | Value |
-|----------|-------|
-| **Source** | [@${CHANNEL_NAME}](https://t.me/${CHANNEL_NAME}) |
-| **Original Link** | ${TG_LINK} |
-| **Size** | ${SIZE_FORMATTED} |
-| **Type** | ${CONTENT_TYPE} |
-| **Status** | ✅ Downloaded |
-
----
-
-## 📥 Download
-
-> ⚠️ This file will be automatically deleted **5 minutes** after download.
-
-| # | File | Link |
-|---|------|------|
-| 1 | \`${BASENAME}\` | [Download](https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/${FILE_ENCODED}) |
-
----
-
-*Downloaded via [khashayar.one](https://khashayar.one)*
-README_EOF
+                printf '%s\n' \
+                  "# ${TITLE_NOEXT}" \
+                  "" \
+                  "---" \
+                  "" \
+                  "## 📋 Content Information" \
+                  "" \
+                  "| Property | Value |" \
+                  "|----------|-------|" \
+                  "| **Source** | [@${CHANNEL_NAME}](https://t.me/${CHANNEL_NAME}) |" \
+                  "| **Original Link** | ${TG_LINK} |" \
+                  "| **Size** | ${SIZE_FORMATTED} |" \
+                  "| **Type** | ${CONTENT_TYPE} |" \
+                  "| **Status** | ✅ Downloaded |" \
+                  "" \
+                  "---" \
+                  "" \
+                  "## 📥 Download" \
+                  "" \
+                  "> ⚠️ This file will be automatically deleted **5 minutes** after download." \
+                  "" \
+                  "| # | File | Link |" \
+                  "|---|------|------|" \
+                  "| 1 | \`${BASENAME}\` | [Download](${RAW_URL}) |" \
+                  "" \
+                  "---" \
+                  "" \
+                  "*Downloaded via [khashayar.one](https://khashayar.one)*" \
+                  > "$FINAL_PATH/README.md"
                 
                 echo "  📝 README created"
               done
@@ -304,11 +287,9 @@ README_EOF
             TEXT_TMP="/tmp/tg_text_$$"
             mkdir -p "$TEXT_TMP"
             
-            # استخراج متن از embed تلگرام
             curl -s "https://t.me/s/${CHANNEL_NAME}/${POST_ID}?embed=1" > "$TEXT_TMP/page.html" 2>/dev/null
             
             if [ -s "$TEXT_TMP/page.html" ]; then
-              # استخراج متن
               TEXT_CONTENT=$(grep -oP '<meta property="og:description" content="\K[^"]+' "$TEXT_TMP/page.html" 2>/dev/null || echo "")
               
               if [ -n "$TEXT_CONTENT" ]; then
@@ -320,37 +301,37 @@ README_EOF
                 
                 cp "$TEXT_TMP/post.txt" "$FINAL_PATH/post.txt"
                 
-                # ساخت README
                 TEXT_LENGTH=$(wc -c < "$FINAL_PATH/post.txt")
                 FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
+                RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/post.txt"
                 
-                cat > "$FINAL_PATH/README.md" << README_EOF
-# 📝 Text Post
-
----
-
-## 📋 Content Information
-
-| Property | Value |
-|----------|-------|
-| **Source** | [@${CHANNEL_NAME}](https://t.me/${CHANNEL_NAME}) |
-| **Original Link** | ${TG_LINK} |
-| **Length** | ${TEXT_LENGTH} characters |
-| **Type** | 📝 Text |
-| **Status** | ✅ Downloaded |
-
----
-
-## 📥 Download
-
-| # | File | Link |
-|---|------|------|
-| 1 | \`post.txt\` | [View](https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/post.txt) |
-
----
-
-*Downloaded via [khashayar.one](https://khashayar.one)*
-README_EOF
+                printf '%s\n' \
+                  "# 📝 Text Post" \
+                  "" \
+                  "---" \
+                  "" \
+                  "## 📋 Content Information" \
+                  "" \
+                  "| Property | Value |" \
+                  "|----------|-------|" \
+                  "| **Source** | [@${CHANNEL_NAME}](https://t.me/${CHANNEL_NAME}) |" \
+                  "| **Original Link** | ${TG_LINK} |" \
+                  "| **Length** | ${TEXT_LENGTH} characters |" \
+                  "| **Type** | 📝 Text |" \
+                  "| **Status** | ✅ Downloaded |" \
+                  "" \
+                  "---" \
+                  "" \
+                  "## 📥 Download" \
+                  "" \
+                  "| # | File | Link |" \
+                  "|---|------|------|" \
+                  "| 1 | \`post.txt\` | [View](${RAW_URL}) |" \
+                  "" \
+                  "---" \
+                  "" \
+                  "*Downloaded via [khashayar.one](https://khashayar.one)*" \
+                  > "$FINAL_PATH/README.md"
                 
                 echo "  ✅ Text extracted (${TEXT_LENGTH} chars)"
               else
@@ -362,10 +343,6 @@ README_EOF
             
             rm -rf "$TEXT_TMP"
           fi
-          
-          # ══════════════════════════════════════════════
-          # گزارش نهایی
-          # ══════════════════════════════════════════════
           
           FILE_COUNT=$(find "$BACKUP_DIR" -type f ! -name "README.md" 2>/dev/null | wc -l)
           
@@ -401,7 +378,6 @@ README_EOF
           mkdir -p videos
           cp -r "$BACKUP_DIR"/* videos/ 2>/dev/null || true
           
-          # ⭐ UPDATE MASTER README ⭐
           echo "📝 Updating master videos list..."
           MASTER_README="videos/README.md"
           {
