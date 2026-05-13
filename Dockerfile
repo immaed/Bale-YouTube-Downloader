@@ -59,7 +59,6 @@ RUN pip3 install --upgrade --quiet \
     beautifulsoup4 \
     requests \
     instaloader \
-    TikTokDownloader \
     && rm -rf /root/.cache/pip
 
 # ══════════════════════════════════════════════════════════
