@@ -393,6 +393,33 @@ jobs:
             echo "  🔄 Fallback 16: pytube..."
             python3 -c "import sys; sys.path.insert(0, '${FB_TMP}'); from pytube import YouTube; yt = YouTube('${FB_URL}'); stream = yt.streams.get_highest_resolution(); stream.download(output_path='${FB_TMP}'); print('  ✅ pytube downloaded')" 2>/dev/null && return 0
             
+            # ⭐ Fallback 17: player_skip=webpage (جدیدترین روش)
+            echo "  🔄 Fallback 17: player_skip=webpage..."
+            yt-dlp --extractor-args "youtube:player_client=web,ios;player_skip=webpage" --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # ⭐ Fallback 18: Invidious API (پروکسی غیرمستقیم)
+            echo "  🔄 Fallback 18: Invidious API..."
+            for INV_HOST in invidious.fdn.fr invidious.nerdvpn.de yewtu.be invidious.tiekoetter.com; do
+              VID_ID=$(echo "$FB_URL" | grep -oP '(?:v=|\/)([a-zA-Z0-9_-]{11})' | head -1)
+              [ -z "$VID_ID" ] && continue
+              yt-dlp --no-check-certificates --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "https://${INV_HOST}/watch?v=${VID_ID}" 2>/dev/null && return 0
+            done
+            
+            # ⭐ Fallback 19: Piped API
+            echo "  🔄 Fallback 19: Piped API..."
+            VID_ID=$(echo "$FB_URL" | grep -oP '(?:v=|\/)([a-zA-Z0-9_-]{11})' | head -1)
+            if [ -n "$VID_ID" ]; then
+              PIPED_RESP=$(curl -s "https://pipedapi.kavin.rocks/streams/${VID_ID}" 2>/dev/null)
+              PIPED_URL=$(echo "$PIPED_RESP" | jq -r '.videoStreams[0].url // empty' 2>/dev/null)
+              if [ -n "$PIPED_URL" ]; then
+                curl -L --progress-bar -o "${FB_TMP}/piped_video.mp4" "$PIPED_URL" 2>/dev/null && return 0
+              fi
+            fi
+            
+            # ⭐ Fallback 20: skip=webpage + iOS client
+            echo "  🔄 Fallback 20: skip=webpage + iOS..."
+            yt-dlp --extractor-args "youtube:player_client=ios;skip=webpage" --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
             return 1
           }
 
