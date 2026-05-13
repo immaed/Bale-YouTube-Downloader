@@ -608,6 +608,7 @@ jobs:
         shell: bash
         run: |
           cd /__w/Bale-YouTube-Downloader/Bale-YouTube-Downloader 2>/dev/null || cd /__w/*/Bale-YouTube-Downloader 2>/dev/null || true
+          git config --global --add safe.directory /__w/Bale-YouTube-Downloader/Bale-YouTube-Downloader 2>/dev/null || true
           #!/bin/bash
           BACKUP_DIR="${{ env.BACKUP_DIR }}"
           BRANCH="${{ env.BRANCH }}"
