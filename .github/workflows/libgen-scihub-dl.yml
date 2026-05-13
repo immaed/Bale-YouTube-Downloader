@@ -1,6 +1,6 @@
 # ============================================================
 # libgen-scihub-dl.yml — Bale LibGen & Sci-Hub Downloader
-# V1.0 — Multi-Source Academic Downloader
+# V2.0 — Persian Support + Multi-Source Fallback
 # Repository: Bale-YouTube-Downloader
 # ============================================================
 
@@ -97,6 +97,7 @@ jobs:
           echo "📊 Max Results: $MAX_RESULTS"
           
           echo "SOURCE=$SOURCE" >> $GITHUB_ENV
+          echo "ORIGINAL_QUERY=$QUERY" >> $GITHUB_ENV
           echo "QUERY=$QUERY" >> $GITHUB_ENV
           echo "LANGUAGE=$LANGUAGE" >> $GITHUB_ENV
           echo "MAX_RESULTS=$MAX_RESULTS" >> $GITHUB_ENV
@@ -113,6 +114,7 @@ jobs:
           set -e
           
           SOURCE="${{ env.SOURCE }}"
+          ORIGINAL_QUERY="${{ env.ORIGINAL_QUERY }}"
           QUERY="${{ env.QUERY }}"
           LANGUAGE="${{ env.LANGUAGE }}"
           MAX_RESULTS="${{ env.MAX_RESULTS }}"
@@ -141,36 +143,172 @@ jobs:
           }
           
           # ══════════════════════════════════════════════
-          # LIBGEN
+          # تابع جستجوی LibGen (چند بار صدا زده میشه)
+          # ══════════════════════════════════════════════
+          
+          search_libgen() {
+            local SEARCH_TERM="$1"
+            local RESULT_FILE="$2"
+            
+            echo "  🔍 Searching LibGen for: $SEARCH_TERM"
+            
+            local ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$SEARCH_TERM'))")
+            
+            for LIBGEN_HOST in libgen.is libgen.st libgen.li libgen.gs; do
+              local RESP=$(curl -s "https://${LIBGEN_HOST}/json.php?req=${ENCODED}&lg_topic=libgen&open=0&view=simple&res=${MAX_RESULTS}&column=title" 2>/dev/null || echo "[]")
+              local COUNT=$(echo "$RESP" | jq '. | length' 2>/dev/null || echo 0)
+              
+              if [ "$COUNT" -gt 0 ]; then
+                echo "$RESP" > "$RESULT_FILE"
+                echo "  ✅ Found $COUNT result(s) on $LIBGEN_HOST"
+                return 0
+              fi
+            done
+            
+            echo "[]" > "$RESULT_FILE"
+            return 1
+          }
+          
+          # ══════════════════════════════════════════════
+          # تابع ترجمه فارسی به انگلیسی
+          # ══════════════════════════════════════════════
+          
+          translate_persian() {
+            local TEXT="$1"
+            
+            # روش ۱: LibreTranslate
+            local RESULT=$(curl -s "https://libretranslate.com/translate" \
+              -H "Content-Type: application/json" \
+              -d "{\"q\":\"$TEXT\",\"source\":\"fa\",\"target\":\"en\",\"format\":\"text\"}" 2>/dev/null | \
+              jq -r '.translatedText // empty' 2>/dev/null)
+            
+            if [ -n "$RESULT" ] && [ "$RESULT" != "null" ]; then
+              echo "$RESULT"
+              return 0
+            fi
+            
+            # روش ۲: MyMemory (رایگان، بدون API key)
+            RESULT=$(curl -s "https://api.mymemory.translated.net/get?q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$TEXT'))")&langpair=fa|en" 2>/dev/null | \
+              jq -r '.responseData.translatedText // empty' 2>/dev/null)
+            
+            if [ -n "$RESULT" ] && [ "$RESULT" != "null" ]; then
+              echo "$RESULT"
+              return 0
+            fi
+            
+            return 1
+          }
+          
+          # ══════════════════════════════════════════════
+          # تشخیص ISBN از ورودی
+          # ══════════════════════════════════════════════
+          
+          extract_isbn() {
+            local INPUT="$1"
+            # تشخیص ISBN-10 یا ISBN-13
+            local ISBN=$(echo "$INPUT" | grep -oP '(\d{10}|\d{13}|\d{3}-\d{1,5}-\d{1,7}-\d{1,7}-\d{1})' | head -1)
+            echo "$ISBN"
+          }
+          
+          # ══════════════════════════════════════════════
+          # LIBGEN — Multi-Strategy Search
           # ══════════════════════════════════════════════
           
           if [ "$SOURCE" = "libgen" ]; then
-            echo "📚 Searching LibGen for: $QUERY"
+            RESULTS_FILE="/tmp/libgen_results.json"
+            FOUND=false
             
-            # URL encode query for API
-            ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
-            
-            # جستجو در LibGen API
-            echo "  🔍 Querying LibGen API..."
-            SEARCH_URL="https://libgen.is/json.php?req=${ENCODED_QUERY}&lg_topic=libgen&open=0&view=simple&res=${MAX_RESULTS}&column=title"
-            
-            SEARCH_RESP=$(curl -s "$SEARCH_URL" 2>/dev/null || echo "[]")
-            
-            if [ -z "$SEARCH_RESP" ] || [ "$SEARCH_RESP" = "[]" ]; then
-              echo "  ⚠️ No results from LibGen API. Trying mirror..."
-              SEARCH_URL="https://libgen.st/json.php?req=${ENCODED_QUERY}&lg_topic=libgen&open=0&view=simple&res=${MAX_RESULTS}&column=title"
-              SEARCH_RESP=$(curl -s "$SEARCH_URL" 2>/dev/null || echo "[]")
+            # ══ Strategy 1: ISBN (دقیق‌ترین) ══
+            ISBN=$(extract_isbn "$ORIGINAL_QUERY")
+            if [ -n "$ISBN" ]; then
+              echo "📚 Strategy 1: Searching by ISBN: $ISBN"
+              if search_libgen "$ISBN" "$RESULTS_FILE"; then
+                FOUND=true
+              fi
             fi
             
-            RESULT_COUNT=$(echo "$SEARCH_RESP" | jq '. | length' 2>/dev/null || echo 0)
+            # ══ Strategy 2: عبارت اصلی ══
+            if [ "$FOUND" = false ]; then
+              echo "📚 Strategy 2: Searching with original query"
+              if search_libgen "$QUERY" "$RESULTS_FILE"; then
+                FOUND=true
+              fi
+            fi
             
-            if [ "$RESULT_COUNT" -eq 0 ]; then
-              echo "  ❌ No books found for: $QUERY"
+            # ══ Strategy 3: تشخیص فارسی + ترجمه ══
+            if [ "$FOUND" = false ]; then
+              if echo "$QUERY" | grep -qP '[\x{0600}-\x{06FF}]'; then
+                echo "📚 Strategy 3: Persian detected, translating..."
+                TRANSLATED=$(translate_persian "$QUERY")
+                
+                if [ -n "$TRANSLATED" ]; then
+                  echo "  ✅ Translated: $TRANSLATED"
+                  if search_libgen "$TRANSLATED" "$RESULTS_FILE"; then
+                    FOUND=true
+                  fi
+                else
+                  echo "  ⚠️ Translation failed"
+                fi
+              fi
+            fi
+            
+            # ══ Strategy 4: جستجوی انگلیسی با حذف کاراکترهای فارسی ══
+            if [ "$FOUND" = false ]; then
+              # استخراج کلمات انگلیسی از متن ترکیبی
+              ENGLISH_PART=$(echo "$QUERY" | grep -oP '[a-zA-Z0-9\s\-]+' | tr '\n' ' ' | sed 's/  / /g' | xargs)
+              
+              if [ -n "$ENGLISH_PART" ] && [ ${#ENGLISH_PART} -gt 3 ]; then
+                echo "📚 Strategy 4: English part only: $ENGLISH_PART"
+                if search_libgen "$ENGLISH_PART" "$RESULTS_FILE"; then
+                  FOUND=true
+                fi
+              fi
+            fi
+            
+            # ══ Strategy 5: جستجوی نویسنده (اگر با کاما جدا شده) ══
+            if [ "$FOUND" = false ]; then
+              AUTHOR_PART=$(echo "$QUERY" | grep -oP '^[^,]+' | head -1)
+              if [ -n "$AUTHOR_PART" ] && [ "$AUTHOR_PART" != "$QUERY" ]; then
+                echo "📚 Strategy 5: Searching by author: $AUTHOR_PART"
+                if search_libgen "$AUTHOR_PART" "$RESULTS_FILE"; then
+                  FOUND=true
+                fi
+              fi
+            fi
+            
+            # ══ Strategy 6: Mirror ایرانی (کتاب‌های فارسی) ══
+            if [ "$FOUND" = false ]; then
+              echo "📚 Strategy 6: Trying Iranian book sources..."
+              
+              # تلاش برای یافتن ISBN از فیپا
+              if echo "$QUERY" | grep -qP '[\x{0600}-\x{06FF}]'; then
+                FIPA_SEARCH=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
+                
+                for FIPA_HOST in opac.nlai.ir ketab.ir fidibo.com; do
+                  echo "  🔍 Checking $FIPA_HOST..."
+                  # فقط بررسی می‌کنیم که سایت در دسترس هست یا نه
+                  if curl -s --max-time 5 "https://${FIPA_HOST}/" &>/dev/null; then
+                    echo "  ℹ️ $FIPA_HOST is accessible (manual search recommended)"
+                  fi
+                done
+              fi
+            fi
+            
+            # ══ پردازش نتایج ══
+            if [ "$FOUND" = false ]; then
+              echo ""
+              echo "  ❌ No books found after all 6 strategies"
+              echo "  💡 Suggestions:"
+              echo "     - Try searching by ISBN (e.g. 9789645300000)"
+              echo "     - Try English title: Advanced Investment Management"
+              echo "     - Try author name only: Reza Raei"
               echo "FILE_COUNT=0" >> $GITHUB_ENV
               exit 0
             fi
             
-            echo "  ✅ Found $RESULT_COUNT book(s)"
+            RESULT_COUNT=$(jq '. | length' "$RESULTS_FILE" 2>/dev/null || echo 0)
+            echo ""
+            echo "  ✅ Found $RESULT_COUNT book(s) total"
             
             # پردازش هر نتیجه
             for ((i=0; i<RESULT_COUNT; i++)); do
@@ -178,14 +316,14 @@ jobs:
               echo "  ─────────────────────────────────────"
               echo "  📚 Processing book $((i+1))/$RESULT_COUNT"
               
-              TITLE=$(echo "$SEARCH_RESP" | jq -r ".[$i].title // \"Unknown Title\"" 2>/dev/null)
-              AUTHOR=$(echo "$SEARCH_RESP" | jq -r ".[$i].author // \"Unknown Author\"" 2>/dev/null)
-              YEAR=$(echo "$SEARCH_RESP" | jq -r ".[$i].year // \"\"" 2>/dev/null)
-              PAGES=$(echo "$SEARCH_RESP" | jq -r ".[$i].pages // \"\"" 2>/dev/null)
-              ISBN=$(echo "$SEARCH_RESP" | jq -r ".[$i].isbn // \"\"" 2>/dev/null)
-              MD5=$(echo "$SEARCH_RESP" | jq -r ".[$i].md5 // \"\"" 2>/dev/null)
-              EXTENSION=$(echo "$SEARCH_RESP" | jq -r ".[$i].extension // \"pdf\"" 2>/dev/null)
-              FILESIZE=$(echo "$SEARCH_RESP" | jq -r ".[$i].filesize // \"0\"" 2>/dev/null)
+              TITLE=$(jq -r ".[$i].title // \"Unknown Title\"" "$RESULTS_FILE" 2>/dev/null)
+              AUTHOR=$(jq -r ".[$i].author // \"Unknown Author\"" "$RESULTS_FILE" 2>/dev/null)
+              YEAR=$(jq -r ".[$i].year // \"\"" "$RESULTS_FILE" 2>/dev/null)
+              PAGES=$(jq -r ".[$i].pages // \"\"" "$RESULTS_FILE" 2>/dev/null)
+              ISBN_VAL=$(jq -r ".[$i].isbn // \"\"" "$RESULTS_FILE" 2>/dev/null)
+              MD5=$(jq -r ".[$i].md5 // \"\"" "$RESULTS_FILE" 2>/dev/null)
+              EXTENSION=$(jq -r ".[$i].extension // \"pdf\"" "$RESULTS_FILE" 2>/dev/null)
+              FILESIZE=$(jq -r ".[$i].filesize // \"0\"" "$RESULTS_FILE" 2>/dev/null)
               
               echo "  📖 Title: $TITLE"
               echo "  👤 Author: $AUTHOR"
@@ -196,30 +334,26 @@ jobs:
                 continue
               fi
               
-              # ساخت لینک دانلود
               MD5_PREFIX="${MD5:0:2}"
               DOWNLOAD_URL="https://download.library.lol/main/${MD5_PREFIX}/${MD5}/${MD5}.${EXTENSION}"
               
-              echo "  📥 Downloading: $DOWNLOAD_URL"
+              echo "  📥 Downloading..."
               
               FOLDER_NAME=$(sanitize_name "${AUTHOR}_${TITLE}")
               FOLDER_NAME="${FOLDER_NAME:0:80}"
               FINAL_PATH="$BACKUP_DIR/$FOLDER_NAME"
               mkdir -p "$FINAL_PATH"
               
-              # دانلود فایل
               if curl -L --progress-bar -o "$FINAL_PATH/book.${EXTENSION}" "$DOWNLOAD_URL" 2>/dev/null; then
                 FILE_SIZE=$(stat -c%s "$FINAL_PATH/book.${EXTENSION}" 2>/dev/null || echo 0)
                 
                 if [ "$FILE_SIZE" -gt 1000 ]; then
                   echo "  ✅ Downloaded ($(format_size $FILE_SIZE))"
                   
-                  # ساخت metadata
                   printf '{\n  "title": "%s",\n  "author": "%s",\n  "year": "%s",\n  "pages": "%s",\n  "isbn": "%s",\n  "format": "%s",\n  "size": "%s",\n  "source": "LibGen",\n  "md5": "%s"\n}\n' \
-                    "$TITLE" "$AUTHOR" "$YEAR" "$PAGES" "$ISBN" "$EXTENSION" "$FILESIZE" "$MD5" \
+                    "$TITLE" "$AUTHOR" "$YEAR" "$PAGES" "$ISBN_VAL" "$EXTENSION" "$FILESIZE" "$MD5" \
                     > "$FINAL_PATH/metadata.json"
                   
-                  # ساخت README
                   FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
                   FILE_ENCODED="book.${EXTENSION}"
                   RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/${FILE_ENCODED}"
@@ -227,57 +361,30 @@ jobs:
                   
                   printf '%s\n' \
                     "# 📚 ${TITLE}" \
-                    "" \
-                    "---" \
-                    "" \
-                    "## 📋 Book Information" \
-                    "" \
-                    "| Property | Value |" \
-                    "|----------|-------|" \
+                    "" "---" "" "## 📋 Book Information" "" \
+                    "| Property | Value |" "|----------|-------|" \
                     "| **Title** | ${TITLE} |" \
                     "| **Author** | ${AUTHOR} |" \
                     "| **Year** | ${YEAR:-N/A} |" \
                     "| **Pages** | ${PAGES:-N/A} |" \
-                    "| **ISBN** | ${ISBN:-N/A} |" \
+                    "| **ISBN** | ${ISBN_VAL:-N/A} |" \
                     "| **Format** | ${EXTENSION} |" \
                     "| **Size** | ${SIZE_FORMATTED} |" \
                     "| **Source** | [LibGen](https://libgen.is) |" \
                     "| **Status** | ✅ Downloaded |" \
-                    "" \
-                    "---" \
-                    "" \
-                    "## 📥 Download" \
-                    "" \
-                    "| # | File | Link |" \
-                    "|---|------|------|" \
+                    "" "---" "" "## 📥 Download" "" \
+                    "| # | File | Link |" "|---|------|------|" \
                     "| 1 | \`book.${EXTENSION}\` | [Download](${RAW_URL}) |" \
-                    "" \
-                    "---" \
-                    "" \
-                    "*Downloaded via [khashayar.one](https://khashayar.one)*" \
+                    "" "---" "" "*Downloaded via [khashayar.one](https://khashayar.one)*" \
                     > "$FINAL_PATH/README.md"
                   
                   echo "  📝 README created"
                 else
-                  echo "  ⚠️ File too small, probably corrupted"
+                  echo "  ⚠️ File too small, corrupted"
                   rm -f "$FINAL_PATH/book.${EXTENSION}"
                 fi
               else
-                echo "  ❌ Download failed, trying mirror..."
-                
-                # Mirror fallback
-                MIRROR_URL="https://download.library.lol/main/${MD5_PREFIX}/${MD5}/${MD5}.djvu"
-                if curl -L --progress-bar -o "$FINAL_PATH/book.djvu" "$MIRROR_URL" 2>/dev/null; then
-                  FILE_SIZE=$(stat -c%s "$FINAL_PATH/book.djvu" 2>/dev/null || echo 0)
-                  if [ "$FILE_SIZE" -gt 1000 ]; then
-                    echo "  ✅ Downloaded from mirror ($(format_size $FILE_SIZE))"
-                  else
-                    echo "  ❌ Mirror also failed"
-                    rm -f "$FINAL_PATH/book.djvu"
-                  fi
-                else
-                  echo "  ❌ All download attempts failed"
-                fi
+                echo "  ❌ Download failed"
               fi
             done
           fi
@@ -289,10 +396,8 @@ jobs:
           if [ "$SOURCE" = "scihub" ]; then
             echo "📄 Downloading from Sci-Hub..."
             
-            # حذف فضاهای خالی از DOI
             DOI=$(echo "$QUERY" | tr -d ' ')
             
-            # لیست mirror های Sci-Hub
             SCIHUB_MIRRORS=(
               "https://sci-hub.pub"
               "https://sci-hub.se"
@@ -305,85 +410,57 @@ jobs:
             for MIRROR in "${SCIHUB_MIRRORS[@]}"; do
               echo "  🔄 Trying: $MIRROR"
               
-              # دانلود از Sci-Hub
               if curl -L --max-time 60 --progress-bar -o "$BACKUP_DIR/paper.pdf" "${MIRROR}/${DOI}" 2>/dev/null; then
                 FILE_SIZE=$(stat -c%s "$BACKUP_DIR/paper.pdf" 2>/dev/null || echo 0)
                 
-                # Sci-Hub گاهی صفحه HTML برمیگردونه. چک کنیم واقعاً PDF هست
                 if [ "$FILE_SIZE" -gt 10000 ] && head -c 4 "$BACKUP_DIR/paper.pdf" | grep -q '%PDF'; then
-                  echo "  ✅ Downloaded from $MIRROR ($(format_size $FILE_SIZE))"
+                  echo "  ✅ Downloaded ($(format_size $FILE_SIZE))"
                   
                   FOLDER_NAME=$(sanitize_name "scihub_${DOI}")
                   FINAL_PATH="$BACKUP_DIR/$FOLDER_NAME"
                   mkdir -p "$FINAL_PATH"
                   mv "$BACKUP_DIR/paper.pdf" "$FINAL_PATH/paper.pdf"
                   
-                  # ساخت metadata
                   printf '{\n  "doi": "%s",\n  "source": "Sci-Hub",\n  "mirror": "%s",\n  "format": "PDF"\n}\n' \
-                    "$DOI" "$MIRROR" \
-                    > "$FINAL_PATH/metadata.json"
+                    "$DOI" "$MIRROR" > "$FINAL_PATH/metadata.json"
                   
-                  # ساخت README
                   FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
                   RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/paper.pdf"
                   SIZE_FORMATTED=$(format_size $FILE_SIZE)
                   
                   printf '%s\n' \
-                    "# 📄 Scientific Paper" \
-                    "" \
-                    "---" \
-                    "" \
-                    "## 📋 Paper Information" \
-                    "" \
-                    "| Property | Value |" \
-                    "|----------|-------|" \
+                    "# 📄 Scientific Paper" "" "---" "" "## 📋 Paper Information" "" \
+                    "| Property | Value |" "|----------|-------|" \
                     "| **DOI** | ${DOI} |" \
                     "| **Source** | [Sci-Hub](${MIRROR}) |" \
                     "| **Size** | ${SIZE_FORMATTED} |" \
                     "| **Format** | PDF |" \
                     "| **Status** | ✅ Downloaded |" \
-                    "" \
-                    "---" \
-                    "" \
-                    "## 📥 Download" \
-                    "" \
-                    "| # | File | Link |" \
-                    "|---|------|------|" \
+                    "" "---" "" "## 📥 Download" "" \
+                    "| # | File | Link |" "|---|------|------|" \
                     "| 1 | \`paper.pdf\` | [Download](${RAW_URL}) |" \
-                    "" \
-                    "---" \
-                    "" \
-                    "*Downloaded via [khashayar.one](https://khashayar.one)*" \
+                    "" "---" "" "*Downloaded via [khashayar.one](https://khashayar.one)*" \
                     > "$FINAL_PATH/README.md"
                   
                   echo "  📝 README created"
                   DOWNLOADED=true
                   break
                 else
-                  echo "  ⚠️ Not a valid PDF (${FILE_SIZE} bytes), trying next mirror..."
                   rm -f "$BACKUP_DIR/paper.pdf"
                 fi
-              else
-                echo "  ⚠️ Failed to connect, trying next mirror..."
               fi
             done
             
             if [ "$DOWNLOADED" = false ]; then
-              echo "  ❌ All Sci-Hub mirrors failed for DOI: $DOI"
+              echo "  ❌ All Sci-Hub mirrors failed"
             fi
           fi
           
-          # ══════════════════════════════════════════════
-          # گزارش نهایی
-          # ══════════════════════════════════════════════
-          
           FILE_COUNT=$(find "$BACKUP_DIR" -type f ! -name "README.md" ! -name "metadata.json" 2>/dev/null | wc -l)
-          
           echo ""
           echo "════════════════════════════════════════════"
-          echo "  📊 Total files downloaded: $FILE_COUNT"
+          echo "  📊 Total files: $FILE_COUNT"
           echo "════════════════════════════════════════════"
-          
           echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
 
       - name: "📤 Push to Repository"
@@ -407,7 +484,6 @@ jobs:
           mkdir -p videos
           cp -r "$BACKUP_DIR"/* videos/ 2>/dev/null || true
           
-          # ⭐ UPDATE MASTER README ⭐
           echo "📝 Updating master videos list..."
           MASTER_README="videos/README.md"
           
@@ -417,12 +493,7 @@ jobs:
             MASTER_TITLE="# 📄 Downloaded Papers (Sci-Hub)"
           fi
           
-          {
-            echo "$MASTER_TITLE"
-            echo ""
-            echo "| # | Title | Author | Size | Link |"
-            echo "|---|-------|--------|------|------|"
-          } > "$MASTER_README"
+          { echo "$MASTER_TITLE"; echo ""; echo "| # | Title | Author | Size | Link |"; echo "|---|-------|--------|------|------|"; } > "$MASTER_README"
           
           NUM=0
           for folder in videos/*/; do
