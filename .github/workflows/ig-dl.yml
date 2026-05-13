@@ -217,15 +217,8 @@ jobs:
           if [ "${{ github.event.inputs.download_metadata }}" = "true" ] || [ "${{ github.event.inputs.download_caption }}" = "true" ]; then
             echo "📊 Extracting metadata..."
             
-            python3 -c "
-import json, os, re, sys
-os.environ['IG_LINK'] = '$IG_LINK'
-os.environ['USERNAME'] = '$USERNAME'
-os.environ['POST_CODE'] = '$POST_CODE'
-os.environ['BACKUP_DIR'] = '$BACKUP_DIR'
-os.environ['DOWNLOAD_CAPTION'] = '${{ github.event.inputs.download_caption }}'
-os.environ['DOWNLOAD_METADATA'] = '${{ github.event.inputs.download_metadata }}'
-
+            cat > /tmp/ig_meta.py << 'PYEOF'
+import json, os, re
 import requests
 from bs4 import BeautifulSoup
 
@@ -251,7 +244,7 @@ try:
         desc = og_desc.get('content', '')
         likes_match = re.search(r'([\d,]+)\s*likes', desc)
         if likes_match: meta['likes'] = likes_match.group(1).replace(',', '')
-        lines = desc.split('\\n')
+        lines = desc.split('\n')
         caption_lines = []
         found_likes = False
         for line in lines:
@@ -259,7 +252,7 @@ try:
                 found_likes = True
                 continue
             if found_likes and line.strip(): caption_lines.append(line.strip())
-        if caption_lines: meta['caption'] = '\\n'.join(caption_lines)
+        if caption_lines: meta['caption'] = '\n'.join(caption_lines)
         hashtags = re.findall(r'#\w+', desc)
         if hashtags: meta['hashtags'] = list(set(hashtags))
         mentions = re.findall(r'@\w+', desc)
@@ -272,15 +265,22 @@ try:
     os.makedirs(os.path.dirname(meta_path), exist_ok=True)
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
-    print(f'  ✅ Metadata saved: {len(meta)} fields')
+    print(f'  OK Metadata saved: {len(meta)} fields')
     if download_caption == 'true' and meta.get('caption'):
         caption_path = os.path.join(backup_dir, folder_name, 'caption.txt')
         with open(caption_path, 'w', encoding='utf-8') as f:
             f.write(meta['caption'])
-        print(f'  ✅ Caption saved ({len(meta[\"caption\"])} chars)')
+        print(f'  OK Caption saved')
 except Exception as e:
-    print(f'  ⚠️ Metadata extraction failed: {e}')
-" 2>/dev/null || true
+    print(f'  WARN Metadata failed: {e}')
+PYEOF
+            
+            export IG_LINK="$IG_LINK"
+            export USERNAME="$USERNAME"
+            export POST_CODE="$POST_CODE"
+            export BACKUP_DIR="$BACKUP_DIR"
+            export DOWNLOAD_CAPTION="${{ github.event.inputs.download_caption }}"
+            python3 /tmp/ig_meta.py 2>/dev/null || true
           fi
           
           # ══════════════════════════════════════════════
