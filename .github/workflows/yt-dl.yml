@@ -110,6 +110,15 @@ jobs:
             if echo "$RESULT" | grep -qE "warp=(on|plus)"; then echo "✅ WARP active!"; break; else sleep 5; fi
           done
 
+      # ── Step 3.5: Restore yt-dlp Cache ────────────────
+      - name: "💾 Restore yt-dlp Cache"
+        uses: actions/cache@v4
+        with:
+          path: /root/.cache/yt-dlp
+          key: yt-dlp-cache-${{ runner.os }}-${{ hashFiles('.github/workflows/yt-dl.yml') }}
+          restore-keys: |
+            yt-dlp-cache-${{ runner.os }}-
+            
       # ── Step 4: Verify Dependencies ─────────────────
       - name: "📦 Verify Dependencies"
         run: |
@@ -247,7 +256,7 @@ jobs:
             echo "| **Title** | \`${VN}\` |" >> "$RF"
             echo "| **Source** | [YouTube](${URL}) |" >> "$RF"
             echo "| **Quality** | ${Q} |" >> "$RF"
-            echo "| **Status** | ✅ Complete |" >> "$RF"
+            echo "| **Status** | ✅ Complete (100%) |" >> "$RF"
             echo "| **Password** | ${PASS_STATUS} |" >> "$RF"
             echo "" >> "$RF"
             echo "---" >> "$RF"
@@ -256,6 +265,26 @@ jobs:
             echo "" >> "$RF"
             echo "> ⚠️ This file will be automatically deleted **5 minutes** after download." >> "$RF"
             [ "$MODE" = "split" ] && echo "> 📦 Download **all parts**, then open the main \`.zip\` file." >> "$RF"
+            echo "" >> "$RF"
+            echo "---" >> "$RF"
+            echo "" >> "$RF"
+            echo "## 🔧 How to Extract" >> "$RF"
+            echo "" >> "$RF"
+            if [ "$MODE" = "split" ]; then
+              echo "| OS | Steps |" >> "$RF"
+              echo "|----|-------|" >> "$RF"
+              echo "| **Windows** | Download all parts → Right-click \`.zip\` → Extract with [7-Zip](https://www.7-zip.org/) |" >> "$RF"
+              echo "| **Mac** | Download all parts → Open with [Keka](https://www.keka.io/) |" >> "$RF"
+              echo "| **Linux** | \`zip -F ${VN}.zip --out fixed.zip && unzip fixed.zip\` |" >> "$RF"
+              echo "| **Android** | Download all parts → Use [ZArchiver](https://play.google.com/store/apps/details?id=ru.zdevs.zarchiver) |" >> "$RF"
+            elif [ -n "$PASS" ]; then
+              echo "| OS | Steps |" >> "$RF"
+              echo "|----|-------|" >> "$RF"
+              echo "| **Windows** | Right-click → Extract with [7-Zip](https://www.7-zip.org/) → Enter password |" >> "$RF"
+              echo "| **Mac** | Open with [Keka](https://www.keka.io/) → Enter password |" >> "$RF"
+              echo "| **Linux** | \`unzip -P '${PASS}' file.zip\` |" >> "$RF"
+              echo "| **Android** | Use [ZArchiver](https://play.google.com/store/apps/details?id=ru.zdevs.zarchiver) → Enter password |" >> "$RF"
+            fi
             echo "" >> "$RF"
             echo "---" >> "$RF"
             echo "" >> "$RF"
@@ -539,6 +568,31 @@ jobs:
               fi
             done
           fi
+
+          # ⭐ UPDATE MASTER README ⭐
+          echo "📝 Updating master videos list..."
+          MASTER_README="videos/README.md"
+          {
+            echo "# 🎬 Downloaded Videos List"
+            echo ""
+            echo "| # | Video | Link |"
+            echo "|---|-------|------|"
+          } > "$MASTER_README"
+          
+          NUM=0
+          for folder in videos/*/; do
+            [ -d "$folder" ] || continue
+            FOLDER_NAME=$(basename "$folder")
+            [ -f "$folder/README.md" ] || continue
+            NUM=$((NUM + 1))
+            FOLDER_ENCODED=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$FOLDER_NAME" 2>/dev/null || echo "$FOLDER_NAME")
+            FOLDER_LINK="https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${BRANCH}/videos/${FOLDER_ENCODED}"
+            echo "| $NUM | 🎬 $FOLDER_NAME | [View]($FOLDER_LINK) |" >> "$MASTER_README"
+          done
+          
+          echo "" >> "$MASTER_README"
+          echo "*Auto-generated list — files are automatically deleted after 5 minutes*" >> "$MASTER_README"
+          git add -f "$MASTER_README"
           
           git add -f videos/
           
