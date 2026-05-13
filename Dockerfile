@@ -58,6 +58,8 @@ RUN pip3 install --upgrade --quiet \
     pytube \
     beautifulsoup4 \
     requests \
+    instaloader \
+    TikTokDownloader \
     && rm -rf /root/.cache/pip
 
 # ══════════════════════════════════════════════════════════
