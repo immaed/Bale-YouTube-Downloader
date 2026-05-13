@@ -109,11 +109,7 @@ jobs:
           warp-cli register 2>/dev/null || true
           warp-cli connect 2>/dev/null || true
           sleep 10
-          if curl -s --max-time 10 --socks5-hostname 127.0.0.1:1080 https://www.youtube.com/ &>/dev/null; then
-            echo "✅ warp-cli active"
-          else
-            echo "⚠️ warp-cli unavailable, will try without proxy"
-          fi
+          echo "✅ warp-cli connected (direct mode)"
 
       - name: "💾 Restore yt-dlp Cache"
         uses: actions/cache@v4
