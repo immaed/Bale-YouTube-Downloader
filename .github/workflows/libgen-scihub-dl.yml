@@ -154,7 +154,7 @@ jobs:
             
             local ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$SEARCH_TERM'))")
             
-            for LIBGEN_HOST in libgen.is libgen.st libgen.li libgen.gs; do
+            for LIBGEN_HOST in libgen.is libgen.st; do
               local RESP=$(curl -s "https://${LIBGEN_HOST}/json.php?req=${ENCODED}&lg_topic=libgen&open=0&view=simple&res=${MAX_RESULTS}&column=title" 2>/dev/null || echo "[]")
               local COUNT=$(echo "$RESP" | jq '. | length' 2>/dev/null || echo 0)
               
