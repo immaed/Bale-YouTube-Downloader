@@ -1,6 +1,6 @@
 # ============================================================
 # ig-dl.yml — Bale Instagram Downloader
-# V1.0 — warp-cli + Multi-Format Support
+# V2.0 — Fixed heredoc + Multi-Fallback + Metadata
 # Repository: Bale-YouTube-Downloader
 # ============================================================
 
@@ -122,10 +122,6 @@ jobs:
           CONTENT_TYPE="${{ env.CONTENT_TYPE }}"
           BACKUP_DIR="${{ env.BACKUP_DIR }}"
           
-          # ══════════════════════════════════════════════
-          # توابع کمکی
-          # ══════════════════════════════════════════════
-          
           sanitize_name() {
             local name="$1"
             name=$(echo "$name" | LC_ALL=C tr '[:space:]｜　' '---' | LC_ALL=C tr -c 'a-zA-Z0-9_-' '-' | tr -s '-' | sed 's/^-//;s/-$//')
@@ -149,10 +145,6 @@ jobs:
             fi
           }
           
-          # ══════════════════════════════════════════════
-          # استخراج نام کاربری و کد پست
-          # ══════════════════════════════════════════════
-          
           if echo "$IG_LINK" | grep -qE '/p/|/reel/|/tv/|/stories/'; then
             USERNAME=$(echo "$IG_LINK" | grep -oP 'instagram\.com/\K[^/]+' | head -1 || echo "unknown")
             POST_CODE=$(echo "$IG_LINK" | grep -oP '/(p|reel|tv|stories)/\K[^/?]+' | head -1 || echo "")
@@ -168,86 +160,50 @@ jobs:
           echo "📋 Kind: $CONTENT_KIND"
           
           # ══════════════════════════════════════════════
-          # دانلود با yt-dlp
+          # دانلود با yt-dlp — ۸ متد fallback
           # ══════════════════════════════════════════════
           
           if [ "$CONTENT_TYPE" != "caption_only" ] && [ "$CONTENT_KIND" != "profile" ]; then
-            echo "🎬 Downloading media with yt-dlp..."
+            echo "🎬 Downloading media..."
             
             TMP_DIR="/tmp/ig_tmp_$$"
             mkdir -p "$TMP_DIR"
-            
             DOWNLOAD_SUCCESS=false
             
-            # Method 1: yt-dlp direct
-            echo "  🔄 Method 1: yt-dlp direct..."
-            yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" \
-              --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
-            
-            # Method 2: yt-dlp iOS UA
-            if [ "$DOWNLOAD_SUCCESS" = false ]; then
-              echo "  🔄 Method 2: yt-dlp iOS..."
-              yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" \
-                --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15" \
-                --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
-            fi
-            
-            # Method 3: yt-dlp Android UA
-            if [ "$DOWNLOAD_SUCCESS" = false ]; then
-              echo "  🔄 Method 3: Android UA..."
-              yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" \
-                --user-agent "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36" \
-                --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
-            fi
-            
-            # Method 4: yt-dlp with cookies
-            if [ "$DOWNLOAD_SUCCESS" = false ] && [ -f /tmp/youtube-cookies.txt ]; then
-              echo "  🔄 Method 4: With cookies..."
-              yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" \
-                --cookies /tmp/youtube-cookies.txt \
-                --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
-            fi
-            
-            # Method 5: yt-dlp force IPv4
-            if [ "$DOWNLOAD_SUCCESS" = false ]; then
-              echo "  🔄 Method 5: Force IPv4..."
-              yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" \
-                --force-ipv4 --no-progress --retries 10 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
-            fi
-            
-            # Method 6: yt-dlp no SSL
-            if [ "$DOWNLOAD_SUCCESS" = false ]; then
-              echo "  🔄 Method 6: No SSL..."
-              yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" \
-                --no-check-certificates --no-progress --retries 10 "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true
-            fi
+            for METHOD in 1 2 3 4 5 6 7 8; do
+              echo "  🔄 Method $METHOD..."
+              case $METHOD in
+                1) yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true ;;
+                2) yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15" --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true ;;
+                3) yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" --user-agent "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36" --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true ;;
+                4) yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" --force-ipv4 --no-progress --retries 10 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true ;;
+                5) yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" --no-check-certificates --no-progress --retries 10 "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true ;;
+                6) yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" --extractor-args "instagram:include_thumbnail" --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true ;;
+                7) [ -f /tmp/youtube-cookies.txt ] && yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" --cookies /tmp/youtube-cookies.txt --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true ;;
+                8) yt-dlp -o "${TMP_DIR}/%(title)s.%(ext)s" --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" --no-progress --retries 5 --no-check-certificates "$IG_LINK" 2>/dev/null && DOWNLOAD_SUCCESS=true ;;
+              esac
+              [ "$DOWNLOAD_SUCCESS" = true ] && break
+            done
             
             if [ "$DOWNLOAD_SUCCESS" = true ]; then
-              echo "✅ Downloaded successfully!"
-              
-              # انتقال فایل‌ها
+              echo "✅ Downloaded!"
               FILE_COUNT=0
               for FILE in "$TMP_DIR"/*; do
                 [ -f "$FILE" ] || continue
-                
                 BASENAME=$(basename "$FILE")
                 SIZE=$(stat -c%s "$FILE")
                 SIZE_MB=$(echo "scale=1; $SIZE/1048576" | bc)
-                
                 echo "  📦 $BASENAME (${SIZE_MB}MB)"
-                
                 FOLDER_NAME=$(sanitize_name "${USERNAME}_${POST_CODE}_${CONTENT_KIND}")
                 FINAL_PATH="$BACKUP_DIR/$FOLDER_NAME"
                 mkdir -p "$FINAL_PATH"
-                
                 cp "$FILE" "$FINAL_PATH/$BASENAME"
                 FILE_COUNT=$((FILE_COUNT + 1))
               done
-              
               echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
               echo "FOLDER_NAME=$FOLDER_NAME" >> $GITHUB_ENV
             else
-              echo "⚠️ Download failed"
+              echo "⚠️ All 8 methods failed"
               echo "FILE_COUNT=0" >> $GITHUB_ENV
             fi
             
@@ -255,116 +211,76 @@ jobs:
           fi
           
           # ══════════════════════════════════════════════
-          # استخراج metadata و کپشن با instaloader
+          # استخراج metadata و کپشن
           # ══════════════════════════════════════════════
           
           if [ "${{ github.event.inputs.download_metadata }}" = "true" ] || [ "${{ github.event.inputs.download_caption }}" = "true" ]; then
             echo "📊 Extracting metadata..."
             
-            META_DIR="/tmp/ig_meta_$$"
-            mkdir -p "$META_DIR"
-            
-            python3 << 'PYEOF'
-import json, sys, os, re
+            python3 -c "
+import json, os, re, sys
+os.environ['IG_LINK'] = '$IG_LINK'
+os.environ['USERNAME'] = '$USERNAME'
+os.environ['POST_CODE'] = '$POST_CODE'
+os.environ['BACKUP_DIR'] = '$BACKUP_DIR'
+os.environ['DOWNLOAD_CAPTION'] = '${{ github.event.inputs.download_caption }}'
+os.environ['DOWNLOAD_METADATA'] = '${{ github.event.inputs.download_metadata }}'
+
+import requests
+from bs4 import BeautifulSoup
 
 ig_link = os.environ.get('IG_LINK', '')
 username = os.environ.get('USERNAME', 'unknown')
 post_code = os.environ.get('POST_CODE', '')
 backup_dir = os.environ.get('BACKUP_DIR', '/tmp')
 download_caption = os.environ.get('DOWNLOAD_CAPTION', 'true')
-download_metadata = os.environ.get('DOWNLOAD_METADATA', 'true')
 
 def sanitize(name):
-    import re
-    name = re.sub(r'[\s｜　]+', '-', name)
+    name = re.sub(r'[\s\|\u3000]+', '-', name)
     name = re.sub(r'[^a-zA-Z0-9_-]', '', name)
     return name or 'content'
 
-# استخراج از embed page
-import requests
-from bs4 import BeautifulSoup
-
+meta = {}
 try:
     resp = requests.get(ig_link, headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15'}, timeout=15)
     soup = BeautifulSoup(resp.text, 'html.parser')
-    
-    meta = {}
-    
-    # og:title → "Video/Photo by @username on Instagram"
     og_title = soup.find('meta', property='og:title')
-    if og_title:
-        title_text = og_title.get('content', '')
-        meta['title'] = title_text
-    
-    # og:description → caption text
+    if og_title: meta['title'] = og_title.get('content', '')
     og_desc = soup.find('meta', property='og:description')
     if og_desc:
         desc = og_desc.get('content', '')
-        # first line is likes count
         likes_match = re.search(r'([\d,]+)\s*likes', desc)
-        if likes_match:
-            meta['likes'] = likes_match.group(1).replace(',', '')
-        
-        # extract caption (after likes line)
-        lines = desc.split('\n')
+        if likes_match: meta['likes'] = likes_match.group(1).replace(',', '')
+        lines = desc.split('\\n')
         caption_lines = []
         found_likes = False
         for line in lines:
             if 'likes' in line.lower() and not found_likes:
                 found_likes = True
                 continue
-            if found_likes and line.strip():
-                caption_lines.append(line.strip())
-        
-        if caption_lines:
-            meta['caption'] = '\n'.join(caption_lines)
-        
-        # hashtags
+            if found_likes and line.strip(): caption_lines.append(line.strip())
+        if caption_lines: meta['caption'] = '\\n'.join(caption_lines)
         hashtags = re.findall(r'#\w+', desc)
-        if hashtags:
-            meta['hashtags'] = list(set(hashtags))
-        
-        # mentions
+        if hashtags: meta['hashtags'] = list(set(hashtags))
         mentions = re.findall(r'@\w+', desc)
-        if mentions:
-            meta['mentions'] = list(set(mentions))
-    
-    # og:image → thumbnail
-    og_image = soup.find('meta', property='og:image')
-    if og_image:
-        meta['thumbnail_url'] = og_image.get('content', '')
-    
-    # og:video → video url
-    og_video = soup.find('meta', property='og:video')
-    if og_video:
-        meta['video_url'] = og_video.get('content', '')
-    
-    # save metadata
+        if mentions: meta['mentions'] = list(set(mentions))
     meta['username'] = username
     meta['post_code'] = post_code
     meta['original_link'] = ig_link
-    
-    folder_name = sanitize(f"{username}_{post_code}_{'p'}")
+    folder_name = sanitize(f'{username}_{post_code}_p')
     meta_path = os.path.join(backup_dir, folder_name, 'metadata.json')
     os.makedirs(os.path.dirname(meta_path), exist_ok=True)
-    
     with open(meta_path, 'w', encoding='utf-8') as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
-    
-    print(f"  ✅ Metadata saved: {len(meta)} fields")
-    
-    # save caption separately
+    print(f'  ✅ Metadata saved: {len(meta)} fields')
     if download_caption == 'true' and meta.get('caption'):
         caption_path = os.path.join(backup_dir, folder_name, 'caption.txt')
         with open(caption_path, 'w', encoding='utf-8') as f:
             f.write(meta['caption'])
-        print(f"  ✅ Caption saved ({len(meta['caption'])} chars)")
-    
+        print(f'  ✅ Caption saved ({len(meta[\"caption\"])} chars)')
 except Exception as e:
-    print(f"  ⚠️ Metadata extraction failed: {e}")
-PYEOF
-            
-            rm -rf "$META_DIR"
+    print(f'  ⚠️ Metadata extraction failed: {e}')
+" 2>/dev/null || true
           fi
           
           # ══════════════════════════════════════════════
@@ -373,22 +289,17 @@ PYEOF
           
           if [ "${{ github.event.inputs.download_profile_pic }}" = "true" ]; then
             echo "👤 Downloading profile picture..."
-            
             PROFILE_DIR="/tmp/ig_profile_$$"
             mkdir -p "$PROFILE_DIR"
-            
             yt-dlp --skip-download --write-thumbnail -o "${PROFILE_DIR}/profile" \
               --no-progress --no-check-certificates "https://www.instagram.com/${USERNAME}/" 2>/dev/null || true
-            
             if ls "$PROFILE_DIR"/profile.* 2>/dev/null | head -1; then
               FOLDER_NAME=$(sanitize_name "${USERNAME}_profile")
               FINAL_PATH="$BACKUP_DIR/$FOLDER_NAME"
               mkdir -p "$FINAL_PATH"
-              
               cp "$PROFILE_DIR"/profile.* "$FINAL_PATH/profile_pic.jpg" 2>/dev/null || true
               echo "  ✅ Profile picture saved"
             fi
-            
             rm -rf "$PROFILE_DIR"
           fi
           
@@ -401,76 +312,49 @@ PYEOF
           
           if [ -d "$FINAL_PATH" ]; then
             echo "📝 Creating README..."
-            
             FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
-            TYPE_EMOJI="📸"
-            TYPE_NAME="Post"
-            
+            TYPE_EMOJI="📸"; TYPE_NAME="Post"
             case $CONTENT_KIND in
               reel) TYPE_EMOJI="🎥"; TYPE_NAME="Reel" ;;
               tv) TYPE_EMOJI="📺"; TYPE_NAME="IGTV" ;;
               stories) TYPE_EMOJI="⭕"; TYPE_NAME="Story" ;;
             esac
             
-            cat > "$FINAL_PATH/README.md" << README_EOF
-# ${TYPE_EMOJI} Instagram ${TYPE_NAME} by @${USERNAME}
-
----
-
-## 📋 ${TYPE_NAME} Information
-
-| Property | Value |
-|----------|-------|
-| **Author** | [@${USERNAME}](https://instagram.com/${USERNAME}) |
-| **Original Link** | [View on Instagram](${IG_LINK}) |
-| **Type** | ${TYPE_EMOJI} ${TYPE_NAME} |
-| **Status** | ✅ Downloaded |
-
----
-
-## 📥 Download
-
-README_EOF
+            printf '%s\n' \
+              "# ${TYPE_EMOJI} Instagram ${TYPE_NAME} by @${USERNAME}" \
+              "" "---" "" "## 📋 ${TYPE_NAME} Information" "" \
+              "| Property | Value |" "|----------|-------|" \
+              "| **Author** | [@${USERNAME}](https://instagram.com/${USERNAME}) |" \
+              "| **Original Link** | [View on Instagram](${IG_LINK}) |" \
+              "| **Type** | ${TYPE_EMOJI} ${TYPE_NAME} |" \
+              "| **Status** | ✅ Downloaded |" \
+              "" "---" "" "## 📥 Download" "" \
+              > "$FINAL_PATH/README.md"
             
-            # لیست فایل‌ها
             FILE_NUM=0
             for FILE in "$FINAL_PATH"/*; do
               [ -f "$FILE" ] || continue
               BASENAME=$(basename "$FILE")
               [ "$BASENAME" = "README.md" ] && continue
-              
               FILE_NUM=$((FILE_NUM + 1))
               FILE_ENCODED=$(urlencode "$BASENAME")
               SIZE=$(stat -c%s "$FILE")
               SIZE_MB=$(echo "scale=1; $SIZE/1048576" | bc)
-              
               if [ $FILE_NUM -eq 1 ]; then
                 echo "| # | File | Size | Link |" >> "$FINAL_PATH/README.md"
                 echo "|---|------|------|------|" >> "$FINAL_PATH/README.md"
               fi
-              
               echo "| $FILE_NUM | \`${BASENAME}\` | ${SIZE_MB} MB | [Download](https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/${FILE_ENCODED}) |" >> "$FINAL_PATH/README.md"
             done
-            
-            echo "" >> "$FINAL_PATH/README.md"
-            echo "---" >> "$FINAL_PATH/README.md"
-            echo "" >> "$FINAL_PATH/README.md"
-            echo "*Downloaded via [khashayar.one](https://khashayar.one)*" >> "$FINAL_PATH/README.md"
-            
+            printf '%s\n' "" "---" "" "*Downloaded via [khashayar.one](https://khashayar.one)*" >> "$FINAL_PATH/README.md"
             echo "  ✅ README created"
           fi
           
-          # ══════════════════════════════════════════════
-          # گزارش نهایی
-          # ══════════════════════════════════════════════
-          
           TOTAL_FILES=$(find "$BACKUP_DIR" -type f ! -name "README.md" 2>/dev/null | wc -l)
-          
           echo ""
           echo "════════════════════════════════════════════"
           echo "  📊 Total files: $TOTAL_FILES"
           echo "════════════════════════════════════════════"
-          
           echo "TOTAL_FILES=$TOTAL_FILES" >> $GITHUB_ENV
 
       - name: "🛑 Disconnect warp-cli"
@@ -498,15 +382,9 @@ README_EOF
           mkdir -p videos
           cp -r "$BACKUP_DIR"/* videos/ 2>/dev/null || true
           
-          # ⭐ UPDATE MASTER README ⭐
           echo "📝 Updating master videos list..."
           MASTER_README="videos/README.md"
-          {
-            echo "# 🎬 Downloaded Instagram Content"
-            echo ""
-            echo "| # | User | Type | Content | Link |"
-            echo "|---|------|------|---------|------|"
-          } > "$MASTER_README"
+          { echo "# 🎬 Downloaded Instagram Content"; echo ""; echo "| # | User | Type | Content | Link |"; echo "|---|------|------|---------|------|"; } > "$MASTER_README"
           
           NUM=0
           for folder in videos/*/; do
@@ -514,23 +392,17 @@ README_EOF
             FOLDER_NAME=$(basename "$folder")
             [ -f "$folder/README.md" ] || continue
             NUM=$((NUM + 1))
-            
             AUTHOR=$(grep -oP '\[@\K[^]]+' "$folder/README.md" 2>/dev/null | head -1 || echo "unknown")
             TYPE=$(grep -oP '📸|🎥|📺|⭕|👤' "$folder/README.md" 2>/dev/null | head -1 || echo "📦")
-            
             FOLDER_ENCODED=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$FOLDER_NAME" 2>/dev/null || echo "$FOLDER_NAME")
             FOLDER_LINK="https://github.com/khashayardev/Bale-YouTube-Downloader/tree/main/videos/${FOLDER_ENCODED}"
-            
             echo "| $NUM | @$AUTHOR | $TYPE | $FOLDER_NAME | [View]($FOLDER_LINK) |" >> "$MASTER_README"
           done
-          
-          echo "" >> "$MASTER_README"
-          echo "*Auto-generated list*" >> "$MASTER_README"
+          echo "" >> "$MASTER_README"; echo "*Auto-generated list*" >> "$MASTER_README"
           git add -f "$MASTER_README"
           git add -f videos/
           
           if git diff --cached --quiet; then echo "No changes"; exit 0; fi
-          
           git commit -m "[khashayar.one] 📸 Instagram download [skip ci]" --quiet || true
           
           for i in $(seq 1 10); do
