@@ -1,6 +1,6 @@
 # ============================================================
 # yt-dl.yml — Bale YouTube Downloader (Docker Edition)
-# V4.0 — Docker Image + Polling Architecture
+# V5.0 — warp-cli + Multi-Layer Fallback
 # Repository: Bale-YouTube-Downloader
 # ============================================================
 
@@ -75,7 +75,6 @@ jobs:
       actions: read
 
     steps:
-      # ── Step 1: Checkout ──────────────────────────────
       - name: "📥 Checkout Repository"
         uses: actions/checkout@v4
         with:
@@ -83,34 +82,39 @@ jobs:
           fetch-depth: 1
           filter: blob:none
 
-      # ── Step 2: Git Config ────────────────────────────
       - name: "⚙️ Configure Git"
+        working-directory: ${{ github.workspace }}
         run: |
-          echo "Current dir: $(pwd)"
-          echo "Home: $HOME"
-          ls -la /__w/
-          ls -la /__w/Bale-YouTube-Downloader/ 2>/dev/null || echo "Path 1 not found"
-          ls -la /__w/*/Bale-YouTube-Downloader/ 2>/dev/null || echo "Path 2 not found"
-          find /__w -name ".git" -type d 2>/dev/null || echo "No .git found"
+          git config --global http.postBuffer 524288000
+          git config --global http.maxRequestBuffer 100M
+          git config --global core.compression 0
+          git config --global pack.windowMemory 256m
+          git config --global pack.packSizeLimit 100m
+          git config --global pack.threads 1
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # ── Step 3: Cloudflare WARP ───────────────────────
-      - name: "🌐 Setup Cloudflare WARP"
+      - name: "🔐 Prepare YouTube Cookies"
         run: |
-          docker network create warp-net 2>/dev/null || true
-          docker run -d \
-            --name warp --restart=no --network warp-net \
-            -p 1080:1080 --cap-add NET_ADMIN \
-            --sysctl net.ipv6.conf.all.disable_ipv6=0 \
-            --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-            -v warp-data:/var/lib/cloudflare-warp \
-            caomingjun/warp:latest
-          sleep 15
-          for i in $(seq 1 5); do
-            RESULT=$(curl -s --max-time 5 --socks5-hostname 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace 2>/dev/null || echo "failed")
-            if echo "$RESULT" | grep -qE "warp=(on|plus)"; then echo "✅ WARP active!"; break; else sleep 5; fi
-          done
+          if [ -n "${{ secrets.YOUTUBE_COOKIES }}" ]; then
+            echo "${{ secrets.YOUTUBE_COOKIES }}" > /tmp/youtube-cookies.txt
+            echo "✅ YouTube cookies loaded from secret"
+          else
+            echo "ℹ️ No YOUTUBE_COOKIES secret — proceeding without cookies"
+          fi
 
-      # ── Step 3.5: Restore yt-dlp Cache ────────────────
+      - name: "🌐 Setup Connection (warp-cli)"
+        run: |
+          echo "🔄 Starting warp-cli..."
+          warp-cli register 2>/dev/null || true
+          warp-cli connect 2>/dev/null || true
+          sleep 10
+          if curl -s --max-time 10 --socks5-hostname 127.0.0.1:1080 https://www.youtube.com/ &>/dev/null; then
+            echo "✅ warp-cli active"
+          else
+            echo "⚠️ warp-cli unavailable, will try without proxy"
+          fi
+
       - name: "💾 Restore yt-dlp Cache"
         uses: actions/cache@v4
         with:
@@ -118,8 +122,7 @@ jobs:
           key: yt-dlp-cache-${{ runner.os }}-${{ hashFiles('.github/workflows/yt-dl.yml') }}
           restore-keys: |
             yt-dlp-cache-${{ runner.os }}-
-            
-      # ── Step 4: Verify Dependencies ─────────────────
+
       - name: "📦 Verify Dependencies"
         run: |
           echo "✅ Pre-installed in Docker image"
@@ -128,7 +131,6 @@ jobs:
           deno --version 2>&1 | head -1
           python3 --version
 
-      # ── Step 5: Setup Parameters ──────────────────────
       - name: "🔧 Setup Download Parameters"
         id: setup
         shell: bash
@@ -180,7 +182,6 @@ jobs:
           echo "USER_FRIENDLY_SUBS=${{ github.event.inputs.user_friendly_subs }}" >> $GITHUB_ENV
           echo "✅ Setup complete"
 
-      # ── Step 6: Download & Process Videos ──────────────
       - name: "⬇️ Download & Process Videos"
         id: download
         shell: bash
@@ -304,19 +305,86 @@ jobs:
             fi
             
             case $METHOD in
-              1) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL" ;;
-              2) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:npm --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL" ;;
-              3) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web,mweb,android_vr" --js-runtimes deno --remote-components ejs:github "$URL" ;;
-              4) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL" ;;
-              5) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android_vr" "$URL" ;;
-              6) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github "$URL" ;;
-              7) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL" ;;
+              1) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github "$URL" ;;
+              2) yt-dlp --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL" ;;
+              3) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:github --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL" ;;
+              4) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web" --js-runtimes deno --remote-components ejs:npm --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" --add-header "Accept-Language:en-US,en;q=0.9" "$URL" ;;
+              5) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=web,mweb,android_vr" --js-runtimes deno --remote-components ejs:github "$URL" ;;
+              6) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=mweb" "$URL" ;;
+              7) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android_vr" "$URL" ;;
               8) yt-dlp --proxy "socks5://127.0.0.1:1080" --format "$FORMAT" $COMMON_FLAGS --extractor-args "youtube:player_client=android" --user-agent "Mozilla/5.0 (Linux; Android 12; SM-S906N Build/QP1A.190711.020) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36" "$URL" ;;
               *) return 1 ;;
             esac
           }
+
+                    # ══════════════════════════════════════════════
+          # ۱۲ متد Fallback برای دور زدن تحریم
+          # ══════════════════════════════════════════════
           
-          # ── Main Loop ────────────────────────────────
+          fallback_download() {
+            local FB_URL="$1"
+            local FB_TMP="$2"
+            
+            # Fallback 1: yt-dlp Android extractor
+            echo "  🔄 Fallback 1: Android extractor..."
+            yt-dlp --extractor-args "youtube:player_client=android" --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # Fallback 2: yt-dlp iOS extractor
+            echo "  🔄 Fallback 2: iOS extractor..."
+            yt-dlp --extractor-args "youtube:player_client=ios" --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # Fallback 3: yt-dlp web_music+tv
+            echo "  🔄 Fallback 3: web_music+tv..."
+            yt-dlp --extractor-args "youtube:player_client=web_music,web,tv" --concurrent-fragments 4 --js-runtimes deno --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # Fallback 4: yt-dlp force IPv4
+            echo "  🔄 Fallback 4: Force IPv4..."
+            yt-dlp --force-ipv4 --retries 10 --fragment-retries 10 --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # Fallback 5: youtube-dl (قدیمی)
+            echo "  🔄 Fallback 5: youtube-dl..."
+            if command -v youtube-dl &>/dev/null; then
+              youtube-dl --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            fi
+            
+            # Fallback 6: yt-dlp بدون Deno
+            echo "  🔄 Fallback 6: No Deno..."
+            yt-dlp --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # Fallback 7: yt-dlp با user-agent موبایل
+            echo "  🔄 Fallback 7: Mobile UA..."
+            yt-dlp --user-agent "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36" --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # Fallback 8: cobalt.tools API
+            echo "  🔄 Fallback 8: cobalt.tools API..."
+            COBALT_RESP=$(curl -s -H "Content-Type: application/json" -d "{\"url\":\"${FB_URL}\",\"vCodec\":\"h264\",\"aFormat\":\"mp3\",\"videoQuality\":\"720\"}" "https://api.cobalt.tools/api/json" 2>/dev/null)
+            COBALT_URL=$(echo "$COBALT_RESP" | jq -r '.url // empty' 2>/dev/null)
+            if [ -n "$COBALT_URL" ]; then
+              curl -L --progress-bar -o "${FB_TMP}/cobalt_video.mp4" "$COBALT_URL" 2>/dev/null && return 0
+            fi
+            
+            # Fallback 9: yt-dlp با extractor-args مختلف
+            echo "  🔄 Fallback 9: Multi-client extractor..."
+            yt-dlp --extractor-args "youtube:player_client=android_vr,ios,web" --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # Fallback 10: yt-dlp بدون certificate check
+            echo "  🔄 Fallback 10: No SSL check..."
+            yt-dlp --no-check-certificates --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # Fallback 11: yt-dlp با format ساده
+            echo "  🔄 Fallback 11: Best format..."
+            yt-dlp -f "best" --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # Fallback 12: yt-dlp با cookies (اگر موجود باشد)
+            echo "  🔄 Fallback 12: With cookies..."
+            if [ -f /tmp/youtube-cookies.txt ]; then
+              yt-dlp --cookies /tmp/youtube-cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            fi
+            
+            return 1
+          }
+
+          
           URL_INDEX=0; DOWNLOADED_COUNT=0; FAILED_COUNT=0
           
           for URL in "${URL_LIST[@]}"; do
@@ -373,10 +441,21 @@ jobs:
             done
             
             if [ "$DOWNLOAD_SUCCESS" = false ]; then
-              echo "  🚫 All methods failed"
-              FAILED_COUNT=$((FAILED_COUNT + 1))
-              rm -rf "$TMP_DIR"
-              continue
+              echo "  🔄 Trying 12 fallback methods..."
+              if fallback_download "$URL" "$TMP_DIR"; then
+                echo "  ✅ Fallback succeeded!"
+                # پیدا کردن فایل دانلود شده
+                FB_FILE=$(find "$TMP_DIR" -type f ! -name "*.jpg" ! -name "*.webp" ! -name "*.part" 2>/dev/null | head -1)
+                if [ -n "$FB_FILE" ]; then
+                  DOWNLOAD_SUCCESS=true
+                fi
+              fi
+              if [ "$DOWNLOAD_SUCCESS" = false ]; then
+                echo "  🚫 All methods (8+12) failed"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+                rm -rf "$TMP_DIR"
+                continue
+              fi
             fi
             
             find "$TMP_DIR" -name "*.part" -delete 2>/dev/null || true
@@ -440,7 +519,6 @@ jobs:
           echo "DOWNLOADED_COUNT=$DOWNLOADED_COUNT" >> $GITHUB_ENV
           echo "FAILED_COUNT=$FAILED_COUNT" >> $GITHUB_ENV
 
-      # ── Step 7: Subtitles (if enabled) ─────────────────
       - name: "📝 Download Subtitles"
         if: ${{ github.event.inputs.download_subtitles == 'true' }}
         shell: bash
@@ -524,19 +602,16 @@ jobs:
           done < /tmp/video_info.txt
           exit 0
 
-      # ── Step 8: Stop WARP ─────────────────────────────
-      - name: "🛑 Stop WARP"
+      - name: "🛑 Disconnect warp-cli"
         if: always()
         run: |
-          docker stop warp 2>/dev/null || true
-          docker rm warp 2>/dev/null || true
+          warp-cli disconnect 2>/dev/null || true
 
-      # ── Step 9: Push + Status.json ────────────────────
       - name: "📤 Push to Repository & Save Status"
         id: push
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
-          cd /__w/Bale-YouTube-Downloader/Bale-YouTube-Downloader || cd /__w/*/Bale-YouTube-Downloader || true
           #!/bin/bash
           BACKUP_DIR="${{ env.BACKUP_DIR }}"
           BRANCH="${{ env.BRANCH }}"
@@ -552,16 +627,12 @@ jobs:
           mkdir -p videos
           cp -r "$BACKUP_DIR"/* videos/ 2>/dev/null || true
           
-          # ⭐ CREATE STATUS.JSON FOR EACH FOLDER ⭐
           if [ -n "$CHAT_ID" ]; then
             echo "📝 Creating status.json files for polling..."
             for FOLDER in videos/*/; do
               [ -d "$FOLDER" ] || continue
               FOLDER_NAME=$(basename "$FOLDER")
-              
               STATUS_FILE="$FOLDER/status.json"
-              
-              # فقط اگر status.json وجود ندارد، بساز
               if [ ! -f "$STATUS_FILE" ]; then
                 echo '{"chat_id":"'"$CHAT_ID"'","status":"ready","created_at":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","folder":"'"$FOLDER_NAME"'"}' > "$STATUS_FILE"
                 echo "  ✅ status.json created for: $FOLDER_NAME"
@@ -569,7 +640,6 @@ jobs:
             done
           fi
 
-          # ⭐ UPDATE MASTER README ⭐
           echo "📝 Updating master videos list..."
           MASTER_README="videos/README.md"
           {
@@ -593,7 +663,6 @@ jobs:
           echo "" >> "$MASTER_README"
           echo "*Auto-generated list — files are automatically deleted after 5 minutes*" >> "$MASTER_README"
           git add -f "$MASTER_README"
-          
           git add -f videos/
           
           if git diff --cached --quiet; then echo "No changes"; exit 0; fi
