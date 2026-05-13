@@ -215,19 +215,9 @@ jobs:
                   echo "  ✅ Downloaded ($(format_size $FILE_SIZE))"
                   
                   # ساخت metadata
-                  cat > "$FINAL_PATH/metadata.json" << METADATA_EOF
-{
-  "title": "$TITLE",
-  "author": "$AUTHOR",
-  "year": "$YEAR",
-  "pages": "$PAGES",
-  "isbn": "$ISBN",
-  "format": "$EXTENSION",
-  "size": "$FILESIZE",
-  "source": "LibGen",
-  "md5": "$MD5"
-}
-METADATA_EOF
+                  printf '{\n  "title": "%s",\n  "author": "%s",\n  "year": "%s",\n  "pages": "%s",\n  "isbn": "%s",\n  "format": "%s",\n  "size": "%s",\n  "source": "LibGen",\n  "md5": "%s"\n}\n' \
+                    "$TITLE" "$AUTHOR" "$YEAR" "$PAGES" "$ISBN" "$EXTENSION" "$FILESIZE" "$MD5" \
+                    > "$FINAL_PATH/metadata.json"
                   
                   # ساخت README
                   FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
@@ -329,14 +319,9 @@ METADATA_EOF
                   mv "$BACKUP_DIR/paper.pdf" "$FINAL_PATH/paper.pdf"
                   
                   # ساخت metadata
-                  cat > "$FINAL_PATH/metadata.json" << METADATA_EOF
-{
-  "doi": "$DOI",
-  "source": "Sci-Hub",
-  "mirror": "$MIRROR",
-  "format": "PDF"
-}
-METADATA_EOF
+                  printf '{\n  "doi": "%s",\n  "source": "Sci-Hub",\n  "mirror": "%s",\n  "format": "PDF"\n}\n' \
+                    "$DOI" "$MIRROR" \
+                    > "$FINAL_PATH/metadata.json"
                   
                   # ساخت README
                   FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
