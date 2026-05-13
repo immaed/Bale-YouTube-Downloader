@@ -30,6 +30,7 @@ RUN curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | \
 RUN apt-get update -qq && \
     apt-get install -y -qq \
     cloudflare-warp \
+    tor \
     # Shell
     bash \
     # Python + Pip
