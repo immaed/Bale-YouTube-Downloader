@@ -377,6 +377,22 @@ jobs:
               yt-dlp --cookies /tmp/youtube-cookies.txt --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
             fi
             
+            # ⭐ Fallback 13: web_safari client
+            echo "  🔄 Fallback 13: web_safari..."
+            yt-dlp --extractor-args "youtube:player_client=web_safari" --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # ⭐ Fallback 14: tv_embedded client
+            echo "  🔄 Fallback 14: tv_embedded..."
+            yt-dlp --extractor-args "youtube:player_client=tv_embedded" --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # ⭐ Fallback 15: web_creator client
+            echo "  🔄 Fallback 15: web_creator..."
+            yt-dlp --extractor-args "youtube:player_client=web_creator" --js-runtimes deno --remote-components ejs:npm --no-progress -o "${FB_TMP}/%(title)s.%(ext)s" "$FB_URL" 2>/dev/null && return 0
+            
+            # ⭐ Fallback 16: pytube (کتابخونه پایتون)
+            echo "  🔄 Fallback 16: pytube..."
+            python3 -c "import sys; sys.path.insert(0, '${FB_TMP}'); from pytube import YouTube; yt = YouTube('${FB_URL}'); stream = yt.streams.get_highest_resolution(); stream.download(output_path='${FB_TMP}'); print('  ✅ pytube downloaded')" 2>/dev/null && return 0
+            
             return 1
           }
 
