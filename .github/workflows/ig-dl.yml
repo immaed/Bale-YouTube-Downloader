@@ -1,6 +1,6 @@
 # ============================================================
 # ig-dl.yml — Bale Instagram Downloader
-# V2.0 — Fixed heredoc + Multi-Fallback + Metadata
+# V2.1 — All heredocs removed, stable YAML
 # Repository: Bale-YouTube-Downloader
 # ============================================================
 
@@ -124,25 +124,13 @@ jobs:
           
           sanitize_name() {
             local name="$1"
-            name=$(echo "$name" | LC_ALL=C tr '[:space:]｜　' '---' | LC_ALL=C tr -c 'a-zA-Z0-9_-' '-' | tr -s '-' | sed 's/^-//;s/-$//')
+            name=$(echo "$name" | LC_ALL=C tr '[:space:]' '-' | LC_ALL=C tr -c 'a-zA-Z0-9_-' '-' | tr -s '-' | sed 's/^-//;s/-$//')
             [ -z "$name" ] && name="content"
             echo "$name"
           }
           
           urlencode() {
             python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
-          }
-          
-          format_number() {
-            local num=$1
-            if [ -z "$num" ] || [ "$num" = "null" ] || [ "$num" = "0" ]; then echo "0"; return; fi
-            if [ "$num" -gt 1000000 ] 2>/dev/null; then
-              echo "$(echo "scale=1; $num/1000000" | bc)M"
-            elif [ "$num" -gt 1000 ] 2>/dev/null; then
-              echo "$(echo "scale=1; $num/1000" | bc)K"
-            else
-              echo "$num"
-            fi
           }
           
           if echo "$IG_LINK" | grep -qE '/p/|/reel/|/tv/|/stories/'; then
@@ -158,14 +146,9 @@ jobs:
           echo "👤 Username: @$USERNAME"
           echo "📝 Post: ${POST_CODE:-N/A}"
           echo "📋 Kind: $CONTENT_KIND"
-          
-          # ══════════════════════════════════════════════
-          # دانلود با yt-dlp — ۸ متد fallback
-          # ══════════════════════════════════════════════
-          
+
           if [ "$CONTENT_TYPE" != "caption_only" ] && [ "$CONTENT_KIND" != "profile" ]; then
             echo "🎬 Downloading media..."
-            
             TMP_DIR="/tmp/ig_tmp_$$"
             mkdir -p "$TMP_DIR"
             DOWNLOAD_SUCCESS=false
@@ -191,9 +174,6 @@ jobs:
               for FILE in "$TMP_DIR"/*; do
                 [ -f "$FILE" ] || continue
                 BASENAME=$(basename "$FILE")
-                SIZE=$(stat -c%s "$FILE")
-                SIZE_MB=$(echo "scale=1; $SIZE/1048576" | bc)
-                echo "  📦 $BASENAME (${SIZE_MB}MB)"
                 FOLDER_NAME=$(sanitize_name "${USERNAME}_${POST_CODE}_${CONTENT_KIND}")
                 FINAL_PATH="$BACKUP_DIR/$FOLDER_NAME"
                 mkdir -p "$FINAL_PATH"
@@ -206,74 +186,12 @@ jobs:
               echo "⚠️ All 8 methods failed"
               echo "FILE_COUNT=0" >> $GITHUB_ENV
             fi
-            
             rm -rf "$TMP_DIR"
           fi
-          
-          # ══════════════════════════════════════════════
-          # استخراج metadata و کپشن
-          # ══════════════════════════════════════════════
-          
+
           if [ "${{ github.event.inputs.download_metadata }}" = "true" ] || [ "${{ github.event.inputs.download_caption }}" = "true" ]; then
             echo "📊 Extracting metadata..."
-            
-            cat > /tmp/ig_meta.py << 'PYEOF'
-import json, os, re
-import requests
-from bs4 import BeautifulSoup
-
-ig_link = os.environ.get('IG_LINK', '')
-username = os.environ.get('USERNAME', 'unknown')
-post_code = os.environ.get('POST_CODE', '')
-backup_dir = os.environ.get('BACKUP_DIR', '/tmp')
-download_caption = os.environ.get('DOWNLOAD_CAPTION', 'true')
-
-def sanitize(name):
-    name = re.sub(r'[\s\|\u3000]+', '-', name)
-    name = re.sub(r'[^a-zA-Z0-9_-]', '', name)
-    return name or 'content'
-
-meta = {}
-try:
-    resp = requests.get(ig_link, headers={'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15'}, timeout=15)
-    soup = BeautifulSoup(resp.text, 'html.parser')
-    og_title = soup.find('meta', property='og:title')
-    if og_title: meta['title'] = og_title.get('content', '')
-    og_desc = soup.find('meta', property='og:description')
-    if og_desc:
-        desc = og_desc.get('content', '')
-        likes_match = re.search(r'([\d,]+)\s*likes', desc)
-        if likes_match: meta['likes'] = likes_match.group(1).replace(',', '')
-        lines = desc.split('\n')
-        caption_lines = []
-        found_likes = False
-        for line in lines:
-            if 'likes' in line.lower() and not found_likes:
-                found_likes = True
-                continue
-            if found_likes and line.strip(): caption_lines.append(line.strip())
-        if caption_lines: meta['caption'] = '\n'.join(caption_lines)
-        hashtags = re.findall(r'#\w+', desc)
-        if hashtags: meta['hashtags'] = list(set(hashtags))
-        mentions = re.findall(r'@\w+', desc)
-        if mentions: meta['mentions'] = list(set(mentions))
-    meta['username'] = username
-    meta['post_code'] = post_code
-    meta['original_link'] = ig_link
-    folder_name = sanitize(f'{username}_{post_code}_p')
-    meta_path = os.path.join(backup_dir, folder_name, 'metadata.json')
-    os.makedirs(os.path.dirname(meta_path), exist_ok=True)
-    with open(meta_path, 'w', encoding='utf-8') as f:
-        json.dump(meta, f, indent=2, ensure_ascii=False)
-    print(f'  OK Metadata saved: {len(meta)} fields')
-    if download_caption == 'true' and meta.get('caption'):
-        caption_path = os.path.join(backup_dir, folder_name, 'caption.txt')
-        with open(caption_path, 'w', encoding='utf-8') as f:
-            f.write(meta['caption'])
-        print(f'  OK Caption saved')
-except Exception as e:
-    print(f'  WARN Metadata failed: {e}')
-PYEOF
+            printf 'import json, os, re\nimport requests\nfrom bs4 import BeautifulSoup\n\nig_link = os.environ.get("IG_LINK", "")\nusername = os.environ.get("USERNAME", "unknown")\npost_code = os.environ.get("POST_CODE", "")\nbackup_dir = os.environ.get("BACKUP_DIR", "/tmp")\ndownload_caption = os.environ.get("DOWNLOAD_CAPTION", "true")\n\ndef sanitize(name):\n    name = re.sub(r"[\s|\\u3000]+", "-", name)\n    name = re.sub(r"[^a-zA-Z0-9_-]", "", name)\n    return name or "content"\n\nmeta = {}\ntry:\n    resp = requests.get(ig_link, headers={"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"}, timeout=15)\n    soup = BeautifulSoup(resp.text, "html.parser")\n    og_title = soup.find("meta", property="og:title")\n    if og_title: meta["title"] = og_title.get("content", "")\n    og_desc = soup.find("meta", property="og:description")\n    if og_desc:\n        desc = og_desc.get("content", "")\n        likes_match = re.search(r"([\\d,]+)\\s*likes", desc)\n        if likes_match: meta["likes"] = likes_match.group(1).replace(",", "")\n        lines = desc.split("\\n")\n        caption_lines = []\n        found_likes = False\n        for line in lines:\n            if "likes" in line.lower() and not found_likes:\n                found_likes = True\n                continue\n            if found_likes and line.strip(): caption_lines.append(line.strip())\n        if caption_lines: meta["caption"] = "\\n".join(caption_lines)\n        hashtags = re.findall(r"#\\w+", desc)\n        if hashtags: meta["hashtags"] = list(set(hashtags))\n        mentions = re.findall(r"@\\w+", desc)\n        if mentions: meta["mentions"] = list(set(mentions))\n    meta["username"] = username\n    meta["post_code"] = post_code\n    meta["original_link"] = ig_link\n    folder_name = sanitize(f"{username}_{post_code}_p")\n    meta_path = os.path.join(backup_dir, folder_name, "metadata.json")\n    os.makedirs(os.path.dirname(meta_path), exist_ok=True)\n    with open(meta_path, "w", encoding="utf-8") as f:\n        json.dump(meta, f, indent=2, ensure_ascii=False)\n    print(f"  OK Metadata saved: {len(meta)} fields")\n    if download_caption == "true" and meta.get("caption"):\n        caption_path = os.path.join(backup_dir, folder_name, "caption.txt")\n        with open(caption_path, "w", encoding="utf-8") as f:\n            f.write(meta["caption"])\n        print("  OK Caption saved")\nexcept Exception as e:\n    print(f"  WARN Metadata failed: {e}")\n' > /tmp/ig_meta.py
             
             export IG_LINK="$IG_LINK"
             export USERNAME="$USERNAME"
@@ -282,17 +200,12 @@ PYEOF
             export DOWNLOAD_CAPTION="${{ github.event.inputs.download_caption }}"
             python3 /tmp/ig_meta.py 2>/dev/null || true
           fi
-          
-          # ══════════════════════════════════════════════
-          # دانلود عکس پروفایل
-          # ══════════════════════════════════════════════
-          
+
           if [ "${{ github.event.inputs.download_profile_pic }}" = "true" ]; then
             echo "👤 Downloading profile picture..."
             PROFILE_DIR="/tmp/ig_profile_$$"
             mkdir -p "$PROFILE_DIR"
-            yt-dlp --skip-download --write-thumbnail -o "${PROFILE_DIR}/profile" \
-              --no-progress --no-check-certificates "https://www.instagram.com/${USERNAME}/" 2>/dev/null || true
+            yt-dlp --skip-download --write-thumbnail -o "${PROFILE_DIR}/profile" --no-progress --no-check-certificates "https://www.instagram.com/${USERNAME}/" 2>/dev/null || true
             if ls "$PROFILE_DIR"/profile.* 2>/dev/null | head -1; then
               FOLDER_NAME=$(sanitize_name "${USERNAME}_profile")
               FINAL_PATH="$BACKUP_DIR/$FOLDER_NAME"
@@ -302,14 +215,10 @@ PYEOF
             fi
             rm -rf "$PROFILE_DIR"
           fi
-          
-          # ══════════════════════════════════════════════
-          # ساخت README
-          # ══════════════════════════════════════════════
-          
+
           FOLDER_NAME="${USERNAME}_${POST_CODE}_${CONTENT_KIND}"
           FINAL_PATH="$BACKUP_DIR/$FOLDER_NAME"
-          
+
           if [ -d "$FINAL_PATH" ]; then
             echo "📝 Creating README..."
             FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
@@ -320,16 +229,7 @@ PYEOF
               stories) TYPE_EMOJI="⭕"; TYPE_NAME="Story" ;;
             esac
             
-            printf '%s\n' \
-              "# ${TYPE_EMOJI} Instagram ${TYPE_NAME} by @${USERNAME}" \
-              "" "---" "" "## 📋 ${TYPE_NAME} Information" "" \
-              "| Property | Value |" "|----------|-------|" \
-              "| **Author** | [@${USERNAME}](https://instagram.com/${USERNAME}) |" \
-              "| **Original Link** | [View on Instagram](${IG_LINK}) |" \
-              "| **Type** | ${TYPE_EMOJI} ${TYPE_NAME} |" \
-              "| **Status** | ✅ Downloaded |" \
-              "" "---" "" "## 📥 Download" "" \
-              > "$FINAL_PATH/README.md"
+            printf '%%s\n' "# ${TYPE_EMOJI} Instagram ${TYPE_NAME} by @${USERNAME}" "" "---" "" "## 📋 ${TYPE_NAME} Information" "" "| Property | Value |" "|----------|-------|" "| **Author** | [@${USERNAME}](https://instagram.com/${USERNAME}) |" "| **Original Link** | [View on Instagram](${IG_LINK}) |" "| **Type** | ${TYPE_EMOJI} ${TYPE_NAME} |" "| **Status** | ✅ Downloaded |" "" "---" "" "## 📥 Download" "" > "$FINAL_PATH/README.md"
             
             FILE_NUM=0
             for FILE in "$FINAL_PATH"/*; do
@@ -346,10 +246,10 @@ PYEOF
               fi
               echo "| $FILE_NUM | \`${BASENAME}\` | ${SIZE_MB} MB | [Download](https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/${FILE_ENCODED}) |" >> "$FINAL_PATH/README.md"
             done
-            printf '%s\n' "" "---" "" "*Downloaded via [khashayar.one](https://khashayar.one)*" >> "$FINAL_PATH/README.md"
+            printf '%%s\n' "" "---" "" "*Downloaded via [khashayar.one](https://khashayar.one)*" >> "$FINAL_PATH/README.md"
             echo "  ✅ README created"
           fi
-          
+
           TOTAL_FILES=$(find "$BACKUP_DIR" -type f ! -name "README.md" 2>/dev/null | wc -l)
           echo ""
           echo "════════════════════════════════════════════"
@@ -384,7 +284,7 @@ PYEOF
           
           echo "📝 Updating master videos list..."
           MASTER_README="videos/README.md"
-          { echo "# 🎬 Downloaded Instagram Content"; echo ""; echo "| # | User | Type | Content | Link |"; echo "|---|------|------|---------|------|"; } > "$MASTER_README"
+          printf '%%s\n' "# 🎬 Downloaded Instagram Content" "" "| # | User | Type | Content | Link |" "|---|------|------|---------|------|" > "$MASTER_README"
           
           NUM=0
           for folder in videos/*/; do
