@@ -56,6 +56,8 @@ RUN apt-get update -qq && \
 RUN pip3 install --upgrade --quiet \
     yt-dlp \
     pytube \
+    beautifulsoup4 \
+    requests \
     && rm -rf /root/.cache/pip
 
 # ══════════════════════════════════════════════════════════
