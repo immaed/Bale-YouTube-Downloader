@@ -55,6 +55,7 @@ RUN apt-get update -qq && \
 # ══════════════════════════════════════════════════════════
 RUN pip3 install --upgrade --quiet \
     yt-dlp \
+    pytube \
     && rm -rf /root/.cache/pip
 
 # ══════════════════════════════════════════════════════════
