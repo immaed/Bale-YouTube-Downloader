@@ -1,60 +1,70 @@
 # ============================================================
-# Dockerfile — Bale YouTube Downloader
+# Dockerfile — Bale YouTube Downloader V5
 # Image: khashayardev/bale-yt-downloader
 # 
 # تمام وابستگی‌های yt-dl.yml | yt-search.yml | cleanup.yml
-# از پیش نصب‌شده برای اجرای فوق‌سریع workflowها
+# + cloudflare-warp (بدون نیاز به Docker-in-Docker)
 # ============================================================
 
 FROM ubuntu:22.04
 
-# جلوگیری از سوال‌های تعاملی APT
 ENV DEBIAN_FRONTEND=noninteractive
 
 # ══════════════════════════════════════════════════════════
-# لایه ۱: بسته‌های سیستمی
+# لایه ۱: بسته‌های سیستمی + Cloudflare WARP
 # ══════════════════════════════════════════════════════════
 RUN apt-get update -qq && \
     apt-get install -y -qq \
+    gnupg \
+    lsb-release \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# اضافه کردن مخزن Cloudflare + نصب WARP
+RUN curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | \
+    gpg --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ jammy main" \
+    > /etc/apt/sources.list.d/cloudflare-client.list
+
+RUN apt-get update -qq && \
+    apt-get install -y -qq \
+    cloudflare-warp \
     # Shell
     bash \
-    # Docker (مورد نیاز برای اجرای Cloudflare WARP داخل container)
-    docker.io \
     # Python + Pip
     python3 \
     python3-pip \
-    # ffmpeg (پردازش ویدیو)
+    # ffmpeg
     ffmpeg \
-    # ابزارهای فشرده‌سازی
+    # Compression tools
     zip \
     p7zip-full \
-    # ابزارهای خط فرمان
-    curl \
+    # CLI tools
     jq \
     bc \
     unzip \
     wget \
-    # Git (checkout و push)
+    # Git
     git \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # ══════════════════════════════════════════════════════════
-# لایه ۲: yt-dlp (دانلودر یوتیوب)
+# لایه ۲: yt-dlp
 # ══════════════════════════════════════════════════════════
 RUN pip3 install --upgrade --quiet \
     yt-dlp \
     && rm -rf /root/.cache/pip
 
 # ══════════════════════════════════════════════════════════
-# لایه ۳: Deno (موتور JavaScript — برای دور زدن تحریم یوتیوب)
+# لایه ۳: Deno
 # ══════════════════════════════════════════════════════════
 RUN curl -fsSL https://deno.land/install.sh | sh && \
     cp /root/.deno/bin/deno /usr/local/bin/deno && \
     chmod +x /usr/local/bin/deno
 
 # ══════════════════════════════════════════════════════════
-# لایه ۴: تنظیمات سراسری Git
+# لایه ۴: تنظیمات Git
 # ══════════════════════════════════════════════════════════
 RUN git config --global http.postBuffer 524288000 && \
     git config --global http.maxRequestBuffer 100M && \
@@ -66,7 +76,7 @@ RUN git config --global http.postBuffer 524288000 && \
     git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
 # ══════════════════════════════════════════════════════════
-# پایان: پوشه کاری + تأیید نهایی
+# لایه ۵: پوشه کاری + تأیید
 # ══════════════════════════════════════════════════════════
 WORKDIR /workspace
 
@@ -78,7 +88,7 @@ RUN echo "=== Bale YouTube Downloader Image ===" && \
     echo "jq     : $(jq --version)" && \
     echo "curl   : $(curl --version | head -1)" && \
     echo "git    : $(git --version)" && \
-    echo "docker : $(docker --version 2>&1 || echo 'CLI only')" && \
+    echo "warp   : $(warp-cli --version 2>&1 || echo 'installed')" && \
     echo "bash   : $(bash --version | head -1)" && \
     echo "=====================================" && \
     echo "✅ All dependencies OK"
