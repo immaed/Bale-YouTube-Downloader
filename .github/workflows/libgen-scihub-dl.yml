@@ -1,0 +1,484 @@
+# ============================================================
+# libgen-scihub-dl.yml — Bale LibGen & Sci-Hub Downloader
+# V1.0 — Multi-Source Academic Downloader
+# Repository: Bale-YouTube-Downloader
+# ============================================================
+
+name: "📚 LibGen & Sci-Hub Downloader"
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "📚 منبع دانلود"
+        required: true
+        type: choice
+        default: "libgen"
+        options:
+          - libgen
+          - scihub
+      query:
+        description: "🔍 عنوان کتاب / ISBN / DOI (برای Sci-Hub فقط DOI)"
+        required: true
+        type: string
+        default: ""
+      language:
+        description: "🌐 زبان (فقط برای LibGen)"
+        required: false
+        type: choice
+        default: "all"
+        options:
+          - all
+          - english
+          - persian
+      max_results:
+        description: "📊 حداکثر نتایج جستجو (۱ تا ۱۰)"
+        required: false
+        type: string
+        default: "5"
+
+env:
+  PROJECT_NAME: "Bale Academic Downloader"
+
+jobs:
+  download:
+    name: "📥 Download & Store"
+    runs-on: ubuntu-latest
+    container:
+      image: khashayardev/bale-yt-downloader:latest
+      options: --privileged
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: "📥 Checkout Repository"
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+          filter: blob:none
+
+      - name: "⚙️ Configure Git"
+        run: |
+          git config --global http.postBuffer 524288000
+          git config --global http.maxRequestBuffer 100M
+          git config --global core.compression 0
+          git config --global pack.windowMemory 256m
+          git config --global pack.packSizeLimit 100m
+          git config --global pack.threads 1
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        shell: bash
+
+      - name: "📦 Verify Dependencies"
+        run: |
+          echo "✅ Pre-installed in Docker image"
+          python3 --version
+          jq --version
+          curl --version | head -1
+
+      - name: "🔧 Setup Download Parameters"
+        id: setup
+        shell: bash
+        run: |
+          SOURCE="${{ github.event.inputs.source }}"
+          QUERY="${{ github.event.inputs.query }}"
+          LANGUAGE="${{ github.event.inputs.language }}"
+          MAX_RESULTS="${{ github.event.inputs.max_results }}"
+          
+          echo "════════════════════════════════════════"
+          echo "  $PROJECT_NAME"
+          echo "════════════════════════════════════════"
+          echo "📚 Source: $SOURCE"
+          echo "🔍 Query: $QUERY"
+          echo "🌐 Language: $LANGUAGE"
+          echo "📊 Max Results: $MAX_RESULTS"
+          
+          echo "SOURCE=$SOURCE" >> $GITHUB_ENV
+          echo "QUERY=$QUERY" >> $GITHUB_ENV
+          echo "LANGUAGE=$LANGUAGE" >> $GITHUB_ENV
+          echo "MAX_RESULTS=$MAX_RESULTS" >> $GITHUB_ENV
+          echo "BACKUP_DIR=/tmp/academic_dl_$$" >> $GITHUB_ENV
+          
+          mkdir -p /tmp/academic_dl_$$
+          echo "✅ Setup complete"
+
+      - name: "📚 Download Academic Content"
+        id: download
+        shell: bash
+        run: |
+          #!/bin/bash
+          set -e
+          
+          SOURCE="${{ env.SOURCE }}"
+          QUERY="${{ env.QUERY }}"
+          LANGUAGE="${{ env.LANGUAGE }}"
+          MAX_RESULTS="${{ env.MAX_RESULTS }}"
+          BACKUP_DIR="${{ env.BACKUP_DIR }}"
+          
+          sanitize_name() {
+            local name="$1"
+            name=$(echo "$name" | LC_ALL=C tr '[:space:]｜　' '---' | LC_ALL=C tr -c 'a-zA-Z0-9_-' '-' | tr -s '-' | sed 's/^-//;s/-$//')
+            [ -z "$name" ] && name="document"
+            echo "$name"
+          }
+          
+          urlencode() {
+            python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1"
+          }
+          
+          format_size() {
+            local size=$1
+            if [ "$size" -gt 1048576 ]; then
+              echo "$(echo "scale=1; $size/1048576" | bc) MB"
+            elif [ "$size" -gt 1024 ]; then
+              echo "$(echo "scale=1; $size/1024" | bc) KB"
+            else
+              echo "${size} B"
+            fi
+          }
+          
+          # ══════════════════════════════════════════════
+          # LIBGEN
+          # ══════════════════════════════════════════════
+          
+          if [ "$SOURCE" = "libgen" ]; then
+            echo "📚 Searching LibGen for: $QUERY"
+            
+            # URL encode query for API
+            ENCODED_QUERY=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$QUERY'))")
+            
+            # جستجو در LibGen API
+            echo "  🔍 Querying LibGen API..."
+            SEARCH_URL="https://libgen.is/json.php?req=${ENCODED_QUERY}&lg_topic=libgen&open=0&view=simple&res=${MAX_RESULTS}&column=title"
+            
+            SEARCH_RESP=$(curl -s "$SEARCH_URL" 2>/dev/null || echo "[]")
+            
+            if [ -z "$SEARCH_RESP" ] || [ "$SEARCH_RESP" = "[]" ]; then
+              echo "  ⚠️ No results from LibGen API. Trying mirror..."
+              SEARCH_URL="https://libgen.st/json.php?req=${ENCODED_QUERY}&lg_topic=libgen&open=0&view=simple&res=${MAX_RESULTS}&column=title"
+              SEARCH_RESP=$(curl -s "$SEARCH_URL" 2>/dev/null || echo "[]")
+            fi
+            
+            RESULT_COUNT=$(echo "$SEARCH_RESP" | jq '. | length' 2>/dev/null || echo 0)
+            
+            if [ "$RESULT_COUNT" -eq 0 ]; then
+              echo "  ❌ No books found for: $QUERY"
+              echo "FILE_COUNT=0" >> $GITHUB_ENV
+              exit 0
+            fi
+            
+            echo "  ✅ Found $RESULT_COUNT book(s)"
+            
+            # پردازش هر نتیجه
+            for ((i=0; i<RESULT_COUNT; i++)); do
+              echo ""
+              echo "  ─────────────────────────────────────"
+              echo "  📚 Processing book $((i+1))/$RESULT_COUNT"
+              
+              TITLE=$(echo "$SEARCH_RESP" | jq -r ".[$i].title // \"Unknown Title\"" 2>/dev/null)
+              AUTHOR=$(echo "$SEARCH_RESP" | jq -r ".[$i].author // \"Unknown Author\"" 2>/dev/null)
+              YEAR=$(echo "$SEARCH_RESP" | jq -r ".[$i].year // \"\"" 2>/dev/null)
+              PAGES=$(echo "$SEARCH_RESP" | jq -r ".[$i].pages // \"\"" 2>/dev/null)
+              ISBN=$(echo "$SEARCH_RESP" | jq -r ".[$i].isbn // \"\"" 2>/dev/null)
+              MD5=$(echo "$SEARCH_RESP" | jq -r ".[$i].md5 // \"\"" 2>/dev/null)
+              EXTENSION=$(echo "$SEARCH_RESP" | jq -r ".[$i].extension // \"pdf\"" 2>/dev/null)
+              FILESIZE=$(echo "$SEARCH_RESP" | jq -r ".[$i].filesize // \"0\"" 2>/dev/null)
+              
+              echo "  📖 Title: $TITLE"
+              echo "  👤 Author: $AUTHOR"
+              echo "  📅 Year: ${YEAR:-N/A}"
+              
+              if [ -z "$MD5" ] || [ "$MD5" = "null" ]; then
+                echo "  ⚠️ No MD5 hash, skipping..."
+                continue
+              fi
+              
+              # ساخت لینک دانلود
+              MD5_PREFIX="${MD5:0:2}"
+              DOWNLOAD_URL="https://download.library.lol/main/${MD5_PREFIX}/${MD5}/${MD5}.${EXTENSION}"
+              
+              echo "  📥 Downloading: $DOWNLOAD_URL"
+              
+              FOLDER_NAME=$(sanitize_name "${AUTHOR}_${TITLE}")
+              FOLDER_NAME="${FOLDER_NAME:0:80}"
+              FINAL_PATH="$BACKUP_DIR/$FOLDER_NAME"
+              mkdir -p "$FINAL_PATH"
+              
+              # دانلود فایل
+              if curl -L --progress-bar -o "$FINAL_PATH/book.${EXTENSION}" "$DOWNLOAD_URL" 2>/dev/null; then
+                FILE_SIZE=$(stat -c%s "$FINAL_PATH/book.${EXTENSION}" 2>/dev/null || echo 0)
+                
+                if [ "$FILE_SIZE" -gt 1000 ]; then
+                  echo "  ✅ Downloaded ($(format_size $FILE_SIZE))"
+                  
+                  # ساخت metadata
+                  cat > "$FINAL_PATH/metadata.json" << METADATA_EOF
+{
+  "title": "$TITLE",
+  "author": "$AUTHOR",
+  "year": "$YEAR",
+  "pages": "$PAGES",
+  "isbn": "$ISBN",
+  "format": "$EXTENSION",
+  "size": "$FILESIZE",
+  "source": "LibGen",
+  "md5": "$MD5"
+}
+METADATA_EOF
+                  
+                  # ساخت README
+                  FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
+                  FILE_ENCODED="book.${EXTENSION}"
+                  RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/${FILE_ENCODED}"
+                  SIZE_FORMATTED=$(format_size $FILE_SIZE)
+                  
+                  printf '%s\n' \
+                    "# 📚 ${TITLE}" \
+                    "" \
+                    "---" \
+                    "" \
+                    "## 📋 Book Information" \
+                    "" \
+                    "| Property | Value |" \
+                    "|----------|-------|" \
+                    "| **Title** | ${TITLE} |" \
+                    "| **Author** | ${AUTHOR} |" \
+                    "| **Year** | ${YEAR:-N/A} |" \
+                    "| **Pages** | ${PAGES:-N/A} |" \
+                    "| **ISBN** | ${ISBN:-N/A} |" \
+                    "| **Format** | ${EXTENSION} |" \
+                    "| **Size** | ${SIZE_FORMATTED} |" \
+                    "| **Source** | [LibGen](https://libgen.is) |" \
+                    "| **Status** | ✅ Downloaded |" \
+                    "" \
+                    "---" \
+                    "" \
+                    "## 📥 Download" \
+                    "" \
+                    "| # | File | Link |" \
+                    "|---|------|------|" \
+                    "| 1 | \`book.${EXTENSION}\` | [Download](${RAW_URL}) |" \
+                    "" \
+                    "---" \
+                    "" \
+                    "*Downloaded via [khashayar.one](https://khashayar.one)*" \
+                    > "$FINAL_PATH/README.md"
+                  
+                  echo "  📝 README created"
+                else
+                  echo "  ⚠️ File too small, probably corrupted"
+                  rm -f "$FINAL_PATH/book.${EXTENSION}"
+                fi
+              else
+                echo "  ❌ Download failed, trying mirror..."
+                
+                # Mirror fallback
+                MIRROR_URL="https://download.library.lol/main/${MD5_PREFIX}/${MD5}/${MD5}.djvu"
+                if curl -L --progress-bar -o "$FINAL_PATH/book.djvu" "$MIRROR_URL" 2>/dev/null; then
+                  FILE_SIZE=$(stat -c%s "$FINAL_PATH/book.djvu" 2>/dev/null || echo 0)
+                  if [ "$FILE_SIZE" -gt 1000 ]; then
+                    echo "  ✅ Downloaded from mirror ($(format_size $FILE_SIZE))"
+                  else
+                    echo "  ❌ Mirror also failed"
+                    rm -f "$FINAL_PATH/book.djvu"
+                  fi
+                else
+                  echo "  ❌ All download attempts failed"
+                fi
+              fi
+            done
+          fi
+          
+          # ══════════════════════════════════════════════
+          # SCI-HUB
+          # ══════════════════════════════════════════════
+          
+          if [ "$SOURCE" = "scihub" ]; then
+            echo "📄 Downloading from Sci-Hub..."
+            
+            # حذف فضاهای خالی از DOI
+            DOI=$(echo "$QUERY" | tr -d ' ')
+            
+            # لیست mirror های Sci-Hub
+            SCIHUB_MIRRORS=(
+              "https://sci-hub.pub"
+              "https://sci-hub.se"
+              "https://sci-hub.st"
+              "https://sci-hub.ru"
+            )
+            
+            DOWNLOADED=false
+            
+            for MIRROR in "${SCIHUB_MIRRORS[@]}"; do
+              echo "  🔄 Trying: $MIRROR"
+              
+              # دانلود از Sci-Hub
+              if curl -L --max-time 60 --progress-bar -o "$BACKUP_DIR/paper.pdf" "${MIRROR}/${DOI}" 2>/dev/null; then
+                FILE_SIZE=$(stat -c%s "$BACKUP_DIR/paper.pdf" 2>/dev/null || echo 0)
+                
+                # Sci-Hub گاهی صفحه HTML برمیگردونه. چک کنیم واقعاً PDF هست
+                if [ "$FILE_SIZE" -gt 10000 ] && head -c 4 "$BACKUP_DIR/paper.pdf" | grep -q '%PDF'; then
+                  echo "  ✅ Downloaded from $MIRROR ($(format_size $FILE_SIZE))"
+                  
+                  FOLDER_NAME=$(sanitize_name "scihub_${DOI}")
+                  FINAL_PATH="$BACKUP_DIR/$FOLDER_NAME"
+                  mkdir -p "$FINAL_PATH"
+                  mv "$BACKUP_DIR/paper.pdf" "$FINAL_PATH/paper.pdf"
+                  
+                  # ساخت metadata
+                  cat > "$FINAL_PATH/metadata.json" << METADATA_EOF
+{
+  "doi": "$DOI",
+  "source": "Sci-Hub",
+  "mirror": "$MIRROR",
+  "format": "PDF"
+}
+METADATA_EOF
+                  
+                  # ساخت README
+                  FOLDER_ENCODED=$(urlencode "$FOLDER_NAME")
+                  RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/videos/${FOLDER_ENCODED}/paper.pdf"
+                  SIZE_FORMATTED=$(format_size $FILE_SIZE)
+                  
+                  printf '%s\n' \
+                    "# 📄 Scientific Paper" \
+                    "" \
+                    "---" \
+                    "" \
+                    "## 📋 Paper Information" \
+                    "" \
+                    "| Property | Value |" \
+                    "|----------|-------|" \
+                    "| **DOI** | ${DOI} |" \
+                    "| **Source** | [Sci-Hub](${MIRROR}) |" \
+                    "| **Size** | ${SIZE_FORMATTED} |" \
+                    "| **Format** | PDF |" \
+                    "| **Status** | ✅ Downloaded |" \
+                    "" \
+                    "---" \
+                    "" \
+                    "## 📥 Download" \
+                    "" \
+                    "| # | File | Link |" \
+                    "|---|------|------|" \
+                    "| 1 | \`paper.pdf\` | [Download](${RAW_URL}) |" \
+                    "" \
+                    "---" \
+                    "" \
+                    "*Downloaded via [khashayar.one](https://khashayar.one)*" \
+                    > "$FINAL_PATH/README.md"
+                  
+                  echo "  📝 README created"
+                  DOWNLOADED=true
+                  break
+                else
+                  echo "  ⚠️ Not a valid PDF (${FILE_SIZE} bytes), trying next mirror..."
+                  rm -f "$BACKUP_DIR/paper.pdf"
+                fi
+              else
+                echo "  ⚠️ Failed to connect, trying next mirror..."
+              fi
+            done
+            
+            if [ "$DOWNLOADED" = false ]; then
+              echo "  ❌ All Sci-Hub mirrors failed for DOI: $DOI"
+            fi
+          fi
+          
+          # ══════════════════════════════════════════════
+          # گزارش نهایی
+          # ══════════════════════════════════════════════
+          
+          FILE_COUNT=$(find "$BACKUP_DIR" -type f ! -name "README.md" ! -name "metadata.json" 2>/dev/null | wc -l)
+          
+          echo ""
+          echo "════════════════════════════════════════════"
+          echo "  📊 Total files downloaded: $FILE_COUNT"
+          echo "════════════════════════════════════════════"
+          
+          echo "FILE_COUNT=$FILE_COUNT" >> $GITHUB_ENV
+
+      - name: "📤 Push to Repository"
+        id: push
+        shell: bash
+        run: |
+          cd /__w/Bale-YouTube-Downloader/Bale-YouTube-Downloader 2>/dev/null || cd /__w/*/Bale-YouTube-Downloader 2>/dev/null || true
+          git config --global --add safe.directory /__w/Bale-YouTube-Downloader/Bale-YouTube-Downloader 2>/dev/null || true
+          
+          BACKUP_DIR="${{ env.BACKUP_DIR }}"
+          BRANCH="main"
+          FILE_COUNT="${{ env.FILE_COUNT }}"
+          SOURCE="${{ env.SOURCE }}"
+          
+          if [ "$FILE_COUNT" -eq 0 ] || [ ! -d "$BACKUP_DIR" ]; then
+            echo "⚠️ No files to push"; exit 0
+          fi
+          
+          git fetch origin "$BRANCH" --quiet
+          git reset --hard origin/"$BRANCH" --quiet
+          mkdir -p videos
+          cp -r "$BACKUP_DIR"/* videos/ 2>/dev/null || true
+          
+          # ⭐ UPDATE MASTER README ⭐
+          echo "📝 Updating master videos list..."
+          MASTER_README="videos/README.md"
+          
+          if [ "$SOURCE" = "libgen" ]; then
+            MASTER_TITLE="# 📚 Downloaded Books (LibGen)"
+          else
+            MASTER_TITLE="# 📄 Downloaded Papers (Sci-Hub)"
+          fi
+          
+          {
+            echo "$MASTER_TITLE"
+            echo ""
+            echo "| # | Title | Author | Size | Link |"
+            echo "|---|-------|--------|------|------|"
+          } > "$MASTER_README"
+          
+          NUM=0
+          for folder in videos/*/; do
+            [ -d "$folder" ] || continue
+            FOLDER_NAME=$(basename "$folder")
+            [ -f "$folder/README.md" ] || continue
+            NUM=$((NUM + 1))
+            
+            TITLE=$(grep -oP '^# 📚 \K.*|^# 📄 \K.*' "$folder/README.md" 2>/dev/null | head -1 || echo "$FOLDER_NAME")
+            AUTHOR=$(grep -oP '\*\*Author\*\* \| \K[^|]+' "$folder/README.md" 2>/dev/null | head -1 | tr -d ' ' || echo "N/A")
+            SIZE=$(grep -oP '\*\*Size\*\* \| \K[^|]+' "$folder/README.md" 2>/dev/null | head -1 | tr -d ' ' || echo "N/A")
+            
+            FOLDER_ENCODED=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$FOLDER_NAME" 2>/dev/null || echo "$FOLDER_NAME")
+            FOLDER_LINK="https://github.com/khashayardev/Bale-YouTube-Downloader/tree/main/videos/${FOLDER_ENCODED}"
+            
+            echo "| $NUM | ${TITLE:0:50} | ${AUTHOR:0:30} | $SIZE | [View]($FOLDER_LINK) |" >> "$MASTER_README"
+          done
+          
+          echo "" >> "$MASTER_README"
+          echo "*Auto-generated list*" >> "$MASTER_README"
+          git add -f "$MASTER_README"
+          git add -f videos/
+          
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          
+          git commit -m "[khashayar.one] 📚 Academic download ($SOURCE) [skip ci]" --quiet || true
+          
+          for i in $(seq 1 10); do
+            if timeout 120 git push --force origin HEAD:"$BRANCH" 2>&1; then
+              echo "✅ Pushed (attempt $i)"; break
+            else
+              [ $i -ge 10 ] && echo "🚫 All push attempts failed" && exit 1
+              sleep $((3 + RANDOM % 10))
+              git fetch origin "$BRANCH" --quiet
+              git reset --hard origin/"$BRANCH" --quiet
+              cp -r "$BACKUP_DIR"/* videos/ 2>/dev/null || true
+              git add -f videos/
+              git commit -m "[khashayar.one] 📚 Retry push ($SOURCE) [skip ci]" --quiet || true
+            fi
+          done
+          
+          echo "════════════════════════════════════════"
+          echo "  ✅ Complete"
+          echo "════════════════════════════════════════"
